@@ -15,6 +15,7 @@ import {
   wpmFromKeystrokes,
 } from "../lib/stats.js";
 import { generateSessionCode, getLiveSession, setLiveSession } from "./store.js";
+import { clearRaceTimers } from "./timeouts.js";
 import type {
   LiveMember,
   LiveSession,
@@ -43,6 +44,8 @@ export async function createPublicSession(guestSessionToken: string) {
     race: null,
     leaderboard: [],
     tickTimer: null,
+    deadlineTimer: null,
+    graceTimer: null,
     createdAt: Date.now(),
   };
   setLiveSession(live);
@@ -72,6 +75,8 @@ export async function ensureLiveSession(
     race: null,
     leaderboard: [],
     tickTimer: null,
+    deadlineTimer: null,
+    graceTimer: null,
     createdAt: row.createdAt.getTime(),
   };
   setLiveSession(live);
@@ -345,6 +350,7 @@ export function recordFinish(
 
 export async function completeRace(session: LiveSession) {
   if (!session.race) return null;
+  clearRaceTimers(session);
   const race = session.race;
 
   const results = Object.entries(race.progress)
@@ -457,6 +463,7 @@ export async function endSession(session: LiveSession): Promise<void> {
     clearInterval(session.tickTimer);
     session.tickTimer = null;
   }
+  clearRaceTimers(session);
   session.status = "ended";
   session.race = null;
   await db

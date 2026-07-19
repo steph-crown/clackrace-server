@@ -52,6 +52,10 @@ export type LiveSession = {
   leaderboard: SessionLeaderboardEntry[];
   /** Broadcast tick handle */
   tickTimer: ReturnType<typeof setInterval> | null;
+  /** Hard race deadline (AFK / stall guard). */
+  deadlineTimer: ReturnType<typeof setTimeout> | null;
+  /** Grace after penultimate finisher. */
+  graceTimer: ReturnType<typeof setTimeout> | null;
   createdAt: number;
 };
 

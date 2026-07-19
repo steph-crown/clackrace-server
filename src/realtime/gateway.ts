@@ -14,6 +14,10 @@ import {
   updatePosition,
 } from "../sessions/service.js";
 import { getLiveSession } from "../sessions/store.js";
+import {
+  maybeArmPenultimateGrace,
+  scheduleRaceTimeouts,
+} from "../sessions/timeouts.js";
 import type { LiveSession } from "../sessions/types.js";
 
 type SocketData = {
@@ -102,6 +106,7 @@ async function startRaceFlow(
   });
   broadcastState(io, session);
   startPositionTick(io, session);
+  scheduleRaceTimeouts(io, session, maybeCompleteRace);
 }
 
 async function maybeCompleteRace(io: Server, session: LiveSession) {
@@ -316,6 +321,7 @@ export function attachRaceGateway(app: FastifyInstance) {
         });
         broadcastState(io, session);
         ack?.({ ok: true, ...result });
+        maybeArmPenultimateGrace(io, session, maybeCompleteRace);
         await maybeCompleteRace(io, session);
       },
     );
