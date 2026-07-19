@@ -1,5 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { Server, type Socket } from "socket.io";
+import { getUserFromSessionToken } from "../auth/token.js";
+import { env } from "../env.js";
 import {
   beginRace,
   completeRace,
@@ -11,6 +13,7 @@ import {
   leaveSession,
   recordFinish,
   snapshotFor,
+  transferCreator,
   updatePosition,
 } from "../sessions/service.js";
 import { getLiveSession } from "../sessions/store.js";
@@ -128,11 +131,8 @@ async function maybeCompleteRace(io: Server, session: LiveSession) {
 export function attachRaceGateway(app: FastifyInstance) {
   const io = new Server(app.server, {
     cors: {
-      origin: [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        ...(process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(",") : []),
-      ],
+      origin: [...env.corsOrigins],
+      credentials: true,
     },
   });
 
@@ -147,6 +147,7 @@ export function attachRaceGateway(app: FastifyInstance) {
           guestSessionToken: string;
           suggestedName?: string;
           carColor?: string;
+          sessionToken?: string;
         },
         ack?: (res: unknown) => void,
       ) => {
@@ -161,12 +162,14 @@ export function attachRaceGateway(app: FastifyInstance) {
             return;
           }
 
+          const user = await getUserFromSessionToken(payload.sessionToken);
           const result = joinSession(session, {
             guestSessionToken: payload.guestSessionToken,
             suggestedName: payload.suggestedName,
-            // Guests: server assigns unique color. Locked colors arrive with Phase 5 accounts.
-            carColor: payload.carColor,
-            lockedCarColor: false,
+            carColor: user?.carColor ?? payload.carColor,
+            lockedCarColor: !!user,
+            userId: user?.id ?? null,
+            displayUsername: user?.username ?? user?.name ?? null,
             socketId: socket.id,
           });
 
@@ -253,17 +256,71 @@ export function attachRaceGateway(app: FastifyInstance) {
       if (!data.sessionId || !data.memberId) return;
       const session = await ensureLiveSession(data.sessionId);
       if (!session) return;
-      if (!isCreator(session, data.memberId)) {
-        ack?.({ ok: false, message: "Only the creator can start a rematch" });
-        return;
-      }
       if (session.status !== "waiting") {
         ack?.({ ok: false, message: "Wait for the current race to finish" });
+        return;
+      }
+
+      // Challenge: either player requests; other must accept (not auto).
+      if (session.visibility === "challenge") {
+        session.rematch = {
+          requestedByMemberId: data.memberId,
+          requestedAt: Date.now(),
+        };
+        const requester = session.members.find((m) => m.id === data.memberId);
+        io.to(room(session.id)).emit("session:toast", {
+          message: `${requester?.displayName ?? "Someone"} wants a rematch`,
+        });
+        broadcastState(io, session);
+        ack?.({ ok: true, pending: true });
+        return;
+      }
+
+      if (!isCreator(session, data.memberId)) {
+        ack?.({ ok: false, message: "Only the creator can start a rematch" });
         return;
       }
       ack?.({ ok: true });
       await startRaceFlow(io, session, "rematch");
     });
+
+    socket.on(
+      "session:rematchRespond",
+      async (
+        payload: { accept: boolean },
+        ack?: (res: unknown) => void,
+      ) => {
+        if (!data.sessionId || !data.memberId) return;
+        const session = await ensureLiveSession(data.sessionId);
+        if (!session) return;
+        if (session.visibility !== "challenge" || !session.rematch) {
+          ack?.({ ok: false, message: "No rematch pending" });
+          return;
+        }
+        if (session.rematch.requestedByMemberId === data.memberId) {
+          ack?.({ ok: false, message: "Wait for the other player" });
+          return;
+        }
+        if (session.status !== "waiting") {
+          ack?.({ ok: false, message: "Race already in progress" });
+          return;
+        }
+
+        if (!payload.accept) {
+          session.rematch = null;
+          io.to(room(session.id)).emit("session:toast", {
+            message: "Rematch declined",
+          });
+          broadcastState(io, session);
+          ack?.({ ok: true, accepted: false });
+          return;
+        }
+
+        session.rematch = null;
+        ack?.({ ok: true, accepted: true });
+        await startRaceFlow(io, session, "rematch");
+      },
+    );
 
     socket.on("session:end", async (ack?: (res: unknown) => void) => {
       if (!data.sessionId || !data.memberId) return;
@@ -340,9 +397,30 @@ export function attachRaceGateway(app: FastifyInstance) {
         });
         broadcastState(io, session);
         await maybeCompleteRace(io, session);
-      } else {
-        member.socketId = null;
+        return;
       }
+
+      // Lobby / between races: free the seat (no zombie slots)
+      const wasCreator = member.isCreator;
+      member.disconnected = true;
+      member.socketId = null;
+      member.isCreator = false;
+      io.to(room(session.id)).emit("session:toast", {
+        message: `${member.displayName} left`,
+      });
+
+      if (wasCreator) {
+        const newCreatorId = transferCreator(session);
+        if (newCreatorId) {
+          const host = session.members.find((m) => m.id === newCreatorId);
+          if (host?.socketId) {
+            io.to(host.socketId).emit("session:toast", {
+              message: "Host left — you're the host now",
+            });
+          }
+        }
+      }
+      broadcastState(io, session);
     });
   });
 

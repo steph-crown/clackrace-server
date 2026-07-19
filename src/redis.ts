@@ -1,10 +1,11 @@
 import { Redis } from "ioredis";
+import { env } from "./env.js";
 
 let redis: Redis | null = null;
 
-/** Redis is optional at boot for Phase 3 — live session state arrives in Phase 4. */
+/** Redis is optional at boot — challenge TTL / email rate limits use it when present. */
 export function getRedis(): Redis | null {
-  const url = process.env.REDIS_URL;
+  const url = env.redisUrl;
   if (!url) return null;
   if (!redis) {
     redis = new Redis(url, {

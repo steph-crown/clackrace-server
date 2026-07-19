@@ -10,6 +10,7 @@ import {
 } from "../db/schema.js";
 import { assignUniqueName } from "../lib/anonymous-names.js";
 import { pickGuestCarColor } from "../lib/car-colors.js";
+import { recordSignedInResult } from "../lib/retention.js";
 import {
   accuracyFromMistakes,
   wpmFromKeystrokes,
@@ -26,6 +27,30 @@ import type {
 
 export const MAX_SESSION_PLAYERS = 8;
 
+function emptyLive(
+  partial: Pick<
+    LiveSession,
+    | "id"
+    | "visibility"
+    | "status"
+    | "creatorGuestToken"
+    | "creatorUserId"
+    | "allowedUserIds"
+    | "createdAt"
+  >,
+): LiveSession {
+  return {
+    ...partial,
+    members: [],
+    race: null,
+    leaderboard: [],
+    rematch: null,
+    tickTimer: null,
+    deadlineTimer: null,
+    graceTimer: null,
+  };
+}
+
 export async function createPublicSession(guestSessionToken: string) {
   const id = generateSessionCode();
   await db.insert(raceSessions).values({
@@ -35,19 +60,42 @@ export async function createPublicSession(guestSessionToken: string) {
     status: "waiting",
   });
 
-  const live: LiveSession = {
+  const live = emptyLive({
     id,
     visibility: "public",
     status: "waiting",
     creatorGuestToken: guestSessionToken,
-    members: [],
-    race: null,
-    leaderboard: [],
-    tickTimer: null,
-    deadlineTimer: null,
-    graceTimer: null,
+    creatorUserId: null,
+    allowedUserIds: null,
     createdAt: Date.now(),
-  };
+  });
+  setLiveSession(live);
+  return { id };
+}
+
+export async function createChallengeSession(opts: {
+  requesterId: string;
+  recipientId: string;
+}) {
+  const id = generateSessionCode();
+  const allowedUserIds = [opts.requesterId, opts.recipientId];
+  await db.insert(raceSessions).values({
+    id,
+    visibility: "challenge",
+    creatorUserId: opts.requesterId,
+    allowedUserIds,
+    status: "waiting",
+  });
+
+  const live = emptyLive({
+    id,
+    visibility: "challenge",
+    status: "waiting",
+    creatorGuestToken: "",
+    creatorUserId: opts.requesterId,
+    allowedUserIds,
+    createdAt: Date.now(),
+  });
   setLiveSession(live);
   return { id };
 }
@@ -64,21 +112,16 @@ export async function ensureLiveSession(
     .where(eq(raceSessions.id, id.toUpperCase()))
     .limit(1);
   if (!row || row.status === "ended") return null;
-  if (row.visibility !== "public") return null;
 
-  const live: LiveSession = {
+  const live = emptyLive({
     id: row.id,
-    visibility: "public",
+    visibility: row.visibility,
     status: row.status === "racing" ? "waiting" : row.status,
     creatorGuestToken: row.creatorGuestToken ?? "",
-    members: [],
-    race: null,
-    leaderboard: [],
-    tickTimer: null,
-    deadlineTimer: null,
-    graceTimer: null,
+    creatorUserId: row.creatorUserId ?? null,
+    allowedUserIds: row.allowedUserIds ?? null,
     createdAt: row.createdAt.getTime(),
-  };
+  });
   setLiveSession(live);
   return live;
 }
@@ -105,6 +148,7 @@ export function snapshotFor(
   return {
     id: session.id,
     status: session.status,
+    visibility: session.visibility,
     members: publicMembers(session),
     race: session.race
       ? {
@@ -123,6 +167,7 @@ export function snapshotFor(
         }
       : null,
     leaderboard: session.leaderboard,
+    rematch: session.rematch,
     you: you
       ? {
           memberId: you.id,
@@ -146,7 +191,13 @@ export type JoinResult =
   | { ok: true; member: LiveMember; promotedPending: boolean }
   | {
       ok: false;
-      code: "full" | "ended" | "not_found" | "already_joined";
+      code:
+        | "full"
+        | "ended"
+        | "not_found"
+        | "already_joined"
+        | "forbidden"
+        | "auth_required";
       message: string;
     };
 
@@ -161,6 +212,8 @@ export function joinSession(
      */
     carColor?: string;
     lockedCarColor?: boolean;
+    userId?: string | null;
+    displayUsername?: string | null;
     socketId: string;
   },
 ): JoinResult {
@@ -168,11 +221,38 @@ export function joinSession(
     return { ok: false, code: "ended", message: "This race session has ended." };
   }
 
+  if (session.visibility === "challenge") {
+    if (!opts.userId) {
+      return {
+        ok: false,
+        code: "auth_required",
+        message: "Sign in to join this challenge.",
+      };
+    }
+    if (
+      !session.allowedUserIds?.length ||
+      !session.allowedUserIds.includes(opts.userId)
+    ) {
+      return {
+        ok: false,
+        code: "forbidden",
+        message: "This challenge is private.",
+      };
+    }
+  }
+
   const existing = session.members.find(
-    (m) => m.guestSessionToken === opts.guestSessionToken && !m.disconnected,
+    (m) =>
+      !m.disconnected &&
+      (m.guestSessionToken === opts.guestSessionToken ||
+        (opts.userId != null && m.userId === opts.userId)),
   );
   if (existing) {
     existing.socketId = opts.socketId;
+    if (opts.userId) existing.userId = opts.userId;
+    if (opts.lockedCarColor && opts.carColor) {
+      existing.carColor = opts.carColor;
+    }
     return { ok: true, member: existing, promotedPending: false };
   }
 
@@ -182,10 +262,16 @@ export function joinSession(
   }
 
   const isCreator =
-    opts.guestSessionToken === session.creatorGuestToken &&
-    !session.members.some((m) => m.isCreator && !m.disconnected);
+    (opts.userId != null &&
+      opts.userId === session.creatorUserId &&
+      !session.members.some((m) => m.isCreator && !m.disconnected)) ||
+    (opts.guestSessionToken === session.creatorGuestToken &&
+      session.creatorGuestToken.length > 0 &&
+      !session.members.some((m) => m.isCreator && !m.disconnected));
 
-  const name = assignUniqueName(opts.suggestedName, takenNames(session));
+  const name = opts.displayUsername
+    ? assignUniqueName(opts.displayUsername, takenNames(session))
+    : assignUniqueName(opts.suggestedName, takenNames(session));
   const takenColors = session.members
     .filter((m) => !m.disconnected)
     .map((m) => m.carColor);
@@ -200,6 +286,7 @@ export function joinSession(
     displayName: name,
     carColor,
     guestSessionToken: opts.guestSessionToken,
+    userId: opts.userId ?? null,
     socketId: opts.socketId,
     isCreator,
     pending,
@@ -221,9 +308,26 @@ export function leaveSession(
   }
   const member = session.members.find((m) => m.id === memberId);
   if (!member) return { ok: true };
+  const wasCreator = member.isCreator;
   member.disconnected = true;
   member.socketId = null;
+  member.isCreator = false;
+  if (wasCreator) transferCreator(session);
   return { ok: true };
+}
+
+/**
+ * Promote the oldest still-active member to creator when the host leaves.
+ * Returns the new creator member id, or null if none remain.
+ */
+export function transferCreator(session: LiveSession): string | null {
+  if (session.members.some((m) => m.isCreator && !m.disconnected)) {
+    return null;
+  }
+  const next = session.members.find((m) => !m.disconnected);
+  if (!next) return null;
+  next.isCreator = true;
+  return next.id;
 }
 
 export function forfeitMember(session: LiveSession, memberId: string): void {
@@ -245,6 +349,7 @@ export async function pickPassage() {
 export async function beginRace(session: LiveSession): Promise<LiveSession["race"]> {
   const passage = await pickPassage();
   const raceId = randomUUID();
+  session.rematch = null;
 
   // Pending joiners become active for this race
   for (const m of session.members) {
@@ -279,7 +384,10 @@ export async function beginRace(session: LiveSession): Promise<LiveSession["race
     id: raceId,
     sessionId: session.id,
     passageId: passage.id,
-    mode: "public_multiplayer",
+    mode:
+      session.visibility === "challenge"
+        ? "direct_challenge"
+        : "public_multiplayer",
     startedAt: new Date(),
   });
 
@@ -391,8 +499,8 @@ export async function completeRace(session: LiveSession) {
       .insert(raceParticipants)
       .values({
         raceId: race.id,
-        userId: null,
-        anonymousName: member.displayName,
+        userId: member.userId,
+        anonymousName: member.userId ? null : member.displayName,
         guestSessionToken: member.guestSessionToken,
         carColor: member.carColor,
         isCpu: false,
@@ -412,6 +520,9 @@ export async function completeRace(session: LiveSession) {
 
     if (r.finished && r.wpm > 0) {
       upsertLeaderboard(session, member, r.wpm);
+      if (member.userId) {
+        await recordSignedInResult(member.userId, r.wpm);
+      }
     }
   }
 

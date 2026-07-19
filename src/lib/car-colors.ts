@@ -1,6 +1,6 @@
 /**
  * Palette for car bodies. Guests get a unique-in-session color from here.
- * Signed-in users (Phase 5+) keep their saved color even if it collides.
+ * Signed-in users keep their saved color even if it collides.
  */
 export const CAR_COLOR_PALETTE = [
   "#2ee6d6", // cyan
@@ -37,10 +37,15 @@ export const CAR_COLOR_PALETTE = [
   "#ea580c", // burnt orange
 ] as const;
 
+/** Random palette color for new accounts (settings can change later). */
+export function pickRandomCarColor(): string {
+  return CAR_COLOR_PALETTE[
+    Math.floor(Math.random() * CAR_COLOR_PALETTE.length)
+  ]!;
+}
+
 export function pickGuestCarColor(taken: Iterable<string>): string {
-  const used = new Set(
-    [...taken].map((c) => c.toLowerCase()),
-  );
+  const used = new Set([...taken].map((c) => c.toLowerCase()));
   const available = CAR_COLOR_PALETTE.filter(
     (c) => !used.has(c.toLowerCase()),
   );

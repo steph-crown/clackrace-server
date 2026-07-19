@@ -30,9 +30,11 @@ export async function sessionsRoutes(app: FastifyInstance) {
     return {
       id: session.id,
       status: session.status,
+      visibility: session.visibility,
       members: publicMembers(session),
       takenNames: [...takenNames(session)],
       leaderboard: session.leaderboard,
+      rematch: session.rematch,
       playerCount: session.members.filter((m) => !m.disconnected).length,
       maxPlayers: 8,
     };

@@ -5,6 +5,7 @@ export type LiveMember = {
   displayName: string;
   carColor: string;
   guestSessionToken: string;
+  userId: string | null;
   socketId: string | null;
   isCreator: boolean;
   /** Waiting for current race to finish before becoming active. */
@@ -42,14 +43,22 @@ export type SessionLeaderboardEntry = {
   racesPlayed: number;
 };
 
+export type RematchRequest = {
+  requestedByMemberId: string;
+  requestedAt: number;
+};
+
 export type LiveSession = {
   id: string;
   visibility: "public" | "challenge";
   status: SessionStatus;
   creatorGuestToken: string;
+  creatorUserId: string | null;
+  allowedUserIds: string[] | null;
   members: LiveMember[];
   race: LiveRace | null;
   leaderboard: SessionLeaderboardEntry[];
+  rematch: RematchRequest | null;
   /** Broadcast tick handle */
   tickTimer: ReturnType<typeof setInterval> | null;
   /** Hard race deadline (AFK / stall guard). */
@@ -71,6 +80,7 @@ export type PublicMember = {
 export type SessionSnapshot = {
   id: string;
   status: SessionStatus;
+  visibility: "public" | "challenge";
   members: PublicMember[];
   race: null | {
     id: string;
@@ -80,6 +90,7 @@ export type SessionSnapshot = {
     positions: Record<string, number>;
   };
   leaderboard: SessionLeaderboardEntry[];
+  rematch: RematchRequest | null;
   you: {
     memberId: string;
     displayName: string;

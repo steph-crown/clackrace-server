@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
+import { getSessionUser } from "../auth/session.js";
 import { db } from "../db/client.js";
 import {
   keystrokeLogs,
@@ -9,6 +10,7 @@ import {
   races,
 } from "../db/schema.js";
 import { accuracyFromMistakes, wpmFromKeystrokes } from "../lib/stats.js";
+import { recordSignedInResult } from "../lib/retention.js";
 
 const bodySchema = z.object({
   passageId: z.string().min(1),
@@ -38,6 +40,7 @@ export async function soloResultsRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     const body = parsed.data;
+    const sessionUser = await getSessionUser(req);
 
     const [passage] = await db
       .select()
@@ -66,7 +69,6 @@ export async function soloResultsRoutes(app: FastifyInstance) {
       body.mistakes,
     );
 
-    // Soft sanity: reject absurd client inflation (still store authoritative)
     if (body.finalWpm > authoritativeWpm + 40 && authoritativeWpm > 0) {
       app.log.warn(
         {
@@ -95,14 +97,16 @@ export async function soloResultsRoutes(app: FastifyInstance) {
       return reply.code(500).send({ error: "Failed to create race" });
     }
 
+    const carColor = sessionUser?.carColor ?? body.carColor;
+
     const [participant] = await db
       .insert(raceParticipants)
       .values({
         raceId: race.id,
-        userId: null,
+        userId: sessionUser?.id ?? null,
         anonymousName: null,
         guestSessionToken: body.guestSessionToken,
-        carColor: body.carColor,
+        carColor,
         isCpu: false,
         cpuDifficulty: body.cpuDifficulty,
         finalWpm: authoritativeWpm,
@@ -116,12 +120,15 @@ export async function soloResultsRoutes(app: FastifyInstance) {
       return reply.code(500).send({ error: "Failed to create participant" });
     }
 
-    // Solo CPU runs: keep keystrokes for future ghost/PB (Phase 7). Cheap for now.
     if (body.keystrokes.length > 0) {
       await db.insert(keystrokeLogs).values({
         raceParticipantId: participant.id,
         strokes: body.keystrokes,
       });
+    }
+
+    if (sessionUser && authoritativeWpm > 0) {
+      await recordSignedInResult(sessionUser.id, authoritativeWpm, endedAt);
     }
 
     return {
