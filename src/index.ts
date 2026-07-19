@@ -12,6 +12,7 @@ import { meRoutes } from "./routes/me.js";
 import { notificationsRoutes } from "./routes/notifications.js";
 import { passagesRoutes } from "./routes/passages.js";
 import { sessionsRoutes } from "./routes/sessions.js";
+import { socketTokenRoutes } from "./routes/socket-token.js";
 import { soloResultsRoutes } from "./routes/solo-results.js";
 
 const app = Fastify({
@@ -33,6 +34,7 @@ app.get("/health", async () => {
 });
 
 await app.register(authRoutes);
+await app.register(socketTokenRoutes);
 await app.register(meRoutes);
 await app.register(claimRoutes);
 await app.register(leaderboardRoutes);

@@ -26,11 +26,27 @@ export async function sendChallengeInviteEmail(opts: {
   to: string;
   fromUsername: string;
   acceptPath: string;
+  kind: "race" | "signup";
   log: { info: (o: unknown, msg?: string) => void };
 }): Promise<"sent" | "logged" | "rate_limited"> {
+  const subject =
+    opts.kind === "signup"
+      ? `${opts.fromUsername} invited you to race on ClackRace`
+      : `${opts.fromUsername} challenged you on ClackRace`;
+
+  const html =
+    opts.kind === "signup"
+      ? `<p><strong>${opts.fromUsername}</strong> challenged you to a typing race on ClackRace.</p>
+<p>Create a free account to accept — you'll land right in the challenge.</p>
+<p><a href="${opts.acceptPath}">Sign up &amp; accept</a></p>
+<p>This invite expires soon.</p>`
+      : `<p><strong>${opts.fromUsername}</strong> challenged you to a typing race.</p>
+<p><a href="${opts.acceptPath}">Accept the challenge</a></p>
+<p>This invite expires soon.</p>`;
+
   if (!env.resendApiKey) {
     opts.log.info(
-      { to: opts.to, acceptPath: opts.acceptPath },
+      { to: opts.to, acceptPath: opts.acceptPath, kind: opts.kind },
       "Challenge invite (no RESEND_API_KEY) — accept URL logged",
     );
     return "logged";
@@ -45,16 +61,19 @@ export async function sendChallengeInviteEmail(opts: {
     body: JSON.stringify({
       from: env.emailFrom,
       to: opts.to,
-      subject: `${opts.fromUsername} challenged you on ClackRace`,
-      html: `<p><strong>${opts.fromUsername}</strong> challenged you to a typing race.</p>
-<p><a href="${opts.acceptPath}">Accept the challenge</a></p>
-<p>This invite expires soon.</p>`,
+      subject,
+      html,
     }),
   });
 
   if (!res.ok) {
     opts.log.info(
-      { status: res.status, to: opts.to, acceptPath: opts.acceptPath },
+      {
+        status: res.status,
+        to: opts.to,
+        acceptPath: opts.acceptPath,
+        kind: opts.kind,
+      },
       "Resend failed — accept URL logged",
     );
     return "logged";

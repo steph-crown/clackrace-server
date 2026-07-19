@@ -2,6 +2,7 @@ import { eq, or } from "drizzle-orm";
 import type { SessionUser } from "../auth/index.js";
 import { db } from "../db/client.js";
 import { user } from "../db/schema.js";
+import { env } from "../env.js";
 import {
   canSendInviteEmail,
   sendChallengeInviteEmail,
@@ -19,9 +20,11 @@ import {
   type ChallengeRecord,
 } from "./store.js";
 
-import { env } from "../env.js";
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-const appOrigin = env.appUrl;
+function isEmail(value: string): boolean {
+  return EMAIL_RE.test(value);
+}
 
 export async function lookupRecipient(query: string) {
   const q = query.trim();
@@ -43,14 +46,29 @@ export async function createChallenge(
   | { ok: true; challenge: ChallengeRecord; emailDelivery: string | null }
   | { ok: false; code: string; message: string }
 > {
-  const recipient = await lookupRecipient(target);
-  if (!recipient) {
+  const trimmed = target.trim();
+  if (!trimmed) {
     return {
       ok: false,
-      code: "not_found",
-      message: "No player found with that username or email.",
+      code: "invalid_target",
+      message: "Enter a username or email.",
     };
   }
+
+  const recipient = await lookupRecipient(trimmed);
+
+  if (!recipient) {
+    if (!isEmail(trimmed)) {
+      return {
+        ok: false,
+        code: "not_found",
+        message: "No player found with that username.",
+      };
+    }
+    // PRD §6.4.7 — no account yet: email invite to sign up into this challenge
+    return inviteNewEmail(requester, trimmed.toLowerCase(), log);
+  }
+
   if (recipient.id === requester.id) {
     return {
       ok: false,
@@ -65,8 +83,7 @@ export async function createChallenge(
   const challenge: ChallengeRecord = {
     id: newChallengeId(),
     requesterId: requester.id,
-    requesterUsername:
-      requester.username ?? requester.name ?? "Racer",
+    requesterUsername: requester.username ?? requester.name ?? "Racer",
     recipientId: recipient.id,
     recipientEmail: recipient.email,
     recipientUsername: recipient.username,
@@ -79,33 +96,95 @@ export async function createChallenge(
 
   await saveChallenge(challenge, ttl);
 
-  pushToUser(recipient.id, "challenge", {
-    type: "invite",
-    challenge,
-  });
-  pushToUser(requester.id, "challenge", {
-    type: "sent",
-    challenge,
-  });
+  pushToUser(recipient.id, "challenge", { type: "invite", challenge });
+  pushToUser(requester.id, "challenge", { type: "sent", challenge });
 
   let emailDelivery: string | null = null;
   if (!online) {
-    const allowed = await canSendInviteEmail(requester.id);
-    if (!allowed) {
-      emailDelivery = "rate_limited";
-    } else {
-      emailDelivery = await sendChallengeInviteEmail({
-        to: recipient.email,
-        fromUsername: challenge.requesterUsername,
-        acceptPath: `${appOrigin}/challenge/${challenge.id}`,
-        log,
-      });
-    }
+    emailDelivery = await deliverInviteEmail(
+      requester.id,
+      recipient.email,
+      challenge,
+      log,
+      "race",
+    );
   }
 
   scheduleExpiry(challenge.id, ttl);
-
   return { ok: true, challenge, emailDelivery };
+}
+
+async function inviteNewEmail(
+  requester: SessionUser,
+  email: string,
+  log: { info: (o: unknown, msg?: string) => void },
+): Promise<
+  | { ok: true; challenge: ChallengeRecord; emailDelivery: string | null }
+  | { ok: false; code: string; message: string }
+> {
+  if (requester.email.toLowerCase() === email) {
+    return {
+      ok: false,
+      code: "self",
+      message: "You can't challenge yourself.",
+    };
+  }
+
+  const ttl = OFFLINE_TTL_SEC;
+  const now = Date.now();
+  const challenge: ChallengeRecord = {
+    id: newChallengeId(),
+    requesterId: requester.id,
+    requesterUsername: requester.username ?? requester.name ?? "Racer",
+    recipientId: null,
+    recipientEmail: email,
+    recipientUsername: null,
+    status: "pending",
+    delivery: "offline",
+    createdAt: now,
+    expiresAt: now + ttl * 1000,
+    sessionId: null,
+  };
+
+  await saveChallenge(challenge, ttl);
+  pushToUser(requester.id, "challenge", { type: "sent", challenge });
+
+  const emailDelivery = await deliverInviteEmail(
+    requester.id,
+    email,
+    challenge,
+    log,
+    "signup",
+  );
+
+  if (emailDelivery === "rate_limited") {
+    return {
+      ok: false,
+      code: "rate_limited",
+      message: "Too many invites sent. Try again later.",
+    };
+  }
+
+  scheduleExpiry(challenge.id, ttl);
+  return { ok: true, challenge, emailDelivery };
+}
+
+async function deliverInviteEmail(
+  senderId: string,
+  to: string,
+  challenge: ChallengeRecord,
+  log: { info: (o: unknown, msg?: string) => void },
+  kind: "race" | "signup",
+): Promise<string | null> {
+  const allowed = await canSendInviteEmail(senderId);
+  if (!allowed) return "rate_limited";
+  return sendChallengeInviteEmail({
+    to,
+    fromUsername: challenge.requesterUsername,
+    acceptPath: `${env.appUrl}/challenge/${challenge.id}`,
+    kind,
+    log,
+  });
 }
 
 const expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -125,23 +204,35 @@ async function expireChallenge(id: string) {
   c.status = "expired";
   await updateChallenge(c, 60);
   pushToUser(c.requesterId, "challenge", { type: "expired", challenge: c });
-  pushToUser(c.recipientId, "challenge", { type: "expired", challenge: c });
+  if (c.recipientId) {
+    pushToUser(c.recipientId, "challenge", { type: "expired", challenge: c });
+  }
 }
 
 export async function revokeChallenge(
   requesterId: string,
   challengeId: string,
-): Promise<{ ok: true } | { ok: false; message: string }> {
+): Promise<{ ok: true } | { ok: false; code: string; message: string }> {
   const c = await getChallenge(challengeId);
   if (!c || c.requesterId !== requesterId) {
-    return { ok: false, message: "Challenge not found" };
+    return {
+      ok: false,
+      code: "not_found",
+      message: "Challenge not found.",
+    };
   }
   if (c.status !== "pending") {
-    return { ok: false, message: "Challenge is no longer pending" };
+    return {
+      ok: false,
+      code: "not_pending",
+      message: "This challenge is no longer pending.",
+    };
   }
   c.status = "revoked";
   await updateChallenge(c, 60);
-  pushToUser(c.recipientId, "challenge", { type: "revoked", challenge: c });
+  if (c.recipientId) {
+    pushToUser(c.recipientId, "challenge", { type: "revoked", challenge: c });
+  }
   return { ok: true };
 }
 
@@ -151,19 +242,60 @@ export async function respondChallenge(
   accept: boolean,
 ): Promise<
   | { ok: true; challenge: ChallengeRecord; sessionId?: string }
-  | { ok: false; message: string }
+  | { ok: false; code: string; message: string }
 > {
   const c = await getChallenge(challengeId);
-  if (!c || c.recipientId !== recipient.id) {
-    return { ok: false, message: "Challenge not found" };
+  if (!c) {
+    return {
+      ok: false,
+      code: "not_found",
+      message: "Challenge not found.",
+    };
   }
+
+  const isRecipient =
+    c.recipientId === recipient.id ||
+    (!c.recipientId &&
+      c.recipientEmail.toLowerCase() === recipient.email.toLowerCase());
+
+  if (!isRecipient) {
+    return {
+      ok: false,
+      code: "forbidden",
+      message: "This invite isn't for you.",
+    };
+  }
+
+  // Claim email invite onto this account
+  if (!c.recipientId) {
+    c.recipientId = recipient.id;
+    c.recipientUsername = recipient.username ?? null;
+  }
+
+  const recipientId = c.recipientId;
+  if (!recipientId) {
+    return {
+      ok: false,
+      code: "forbidden",
+      message: "This invite isn't for you.",
+    };
+  }
+
   if (c.status !== "pending") {
-    return { ok: false, message: "This invite has expired or was cancelled." };
+    return {
+      ok: false,
+      code: "not_pending",
+      message: "This invite has expired or was cancelled.",
+    };
   }
   if (Date.now() > c.expiresAt) {
     c.status = "expired";
     await updateChallenge(c, 60);
-    return { ok: false, message: "This invite has expired." };
+    return {
+      ok: false,
+      code: "expired",
+      message: "This invite has expired.",
+    };
   }
 
   if (!accept) {
@@ -178,7 +310,7 @@ export async function respondChallenge(
 
   const session = await createChallengeSession({
     requesterId: c.requesterId,
-    recipientId: c.recipientId,
+    recipientId,
   });
   c.status = "accepted";
   c.sessionId = session.id;
@@ -189,7 +321,7 @@ export async function respondChallenge(
     challenge: c,
     sessionId: session.id,
   });
-  pushToUser(c.recipientId, "challenge", {
+  pushToUser(recipientId, "challenge", {
     type: "accepted",
     challenge: c,
     sessionId: session.id,
@@ -199,13 +331,22 @@ export async function respondChallenge(
 }
 
 export async function getChallengeForUser(
-  userId: string,
+  user: SessionUser,
   challengeId: string,
 ) {
   const c = await getChallenge(challengeId);
   if (!c) return null;
-  if (c.requesterId !== userId && c.recipientId !== userId) return null;
-  return c;
+  if (c.requesterId === user.id) return c;
+  if (c.recipientId === user.id) return c;
+  if (
+    !c.recipientId &&
+    c.recipientEmail.toLowerCase() === user.email.toLowerCase()
+  ) {
+    return c;
+  }
+  return null;
 }
 
-export { listUserChallenges };
+export async function listChallengesForSessionUser(u: SessionUser) {
+  return listUserChallenges(u.id, u.email);
+}

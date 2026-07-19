@@ -12,7 +12,8 @@ export type ChallengeRecord = {
   id: string;
   requesterId: string;
   requesterUsername: string;
-  recipientId: string;
+  /** Null until an email invitee creates an account and opens the invite. */
+  recipientId: string | null;
   recipientEmail: string;
   recipientUsername: string | null;
   status: ChallengeStatus;
@@ -30,6 +31,10 @@ function key(id: string) {
 
 function userPendingKey(userId: string) {
   return `challenge:user:${userId}`;
+}
+
+function emailPendingKey(email: string) {
+  return `challenge:email:${email.toLowerCase()}`;
 }
 
 async function redis() {
@@ -51,8 +56,13 @@ export async function saveChallenge(
   const r = await redis();
   if (!r) return;
   await r.set(key(record.id), JSON.stringify(record), "EX", ttlSec);
-  await r.sadd(userPendingKey(record.recipientId), record.id);
-  await r.expire(userPendingKey(record.recipientId), ttlSec);
+  if (record.recipientId) {
+    await r.sadd(userPendingKey(record.recipientId), record.id);
+    await r.expire(userPendingKey(record.recipientId), ttlSec);
+  } else {
+    await r.sadd(emailPendingKey(record.recipientEmail), record.id);
+    await r.expire(emailPendingKey(record.recipientEmail), ttlSec);
+  }
   await r.sadd(userPendingKey(record.requesterId), record.id);
   await r.expire(userPendingKey(record.requesterId), ttlSec);
 }
@@ -81,15 +91,26 @@ export async function updateChallenge(
 
 export async function listUserChallenges(
   userId: string,
+  email?: string | null,
 ): Promise<ChallengeRecord[]> {
   const r = await redis();
   const ids = new Set<string>();
   if (r) {
-    const fromRedis = await r.smembers(userPendingKey(userId));
-    for (const id of fromRedis) ids.add(id);
+    for (const id of await r.smembers(userPendingKey(userId))) ids.add(id);
+    if (email) {
+      for (const id of await r.smembers(emailPendingKey(email))) ids.add(id);
+    }
   }
   for (const c of memory.values()) {
-    if (c.requesterId === userId || c.recipientId === userId) ids.add(c.id);
+    if (
+      c.requesterId === userId ||
+      c.recipientId === userId ||
+      (email &&
+        !c.recipientId &&
+        c.recipientEmail.toLowerCase() === email.toLowerCase())
+    ) {
+      ids.add(c.id);
+    }
   }
   const out: ChallengeRecord[] = [];
   for (const id of ids) {

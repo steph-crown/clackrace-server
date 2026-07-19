@@ -4,22 +4,28 @@ import { getSessionUser } from "../auth/session.js";
 import {
   createChallenge,
   getChallengeForUser,
-  listUserChallenges,
+  listChallengesForSessionUser,
   respondChallenge,
   revokeChallenge,
 } from "../challenges/service.js";
+import { sendError } from "../lib/api-error.js";
 
 export async function challengesRoutes(app: FastifyInstance) {
   app.post("/challenges", async (req, reply) => {
     const sessionUser = await getSessionUser(req);
     if (!sessionUser) {
-      return reply.code(401).send({ error: "Sign in required" });
+      return sendError(reply, 401, "unauthorized", "Sign in required.");
     }
     const parsed = z
       .object({ target: z.string().min(1).max(254) })
       .safeParse(req.body);
     if (!parsed.success) {
-      return reply.code(400).send({ error: "target required" });
+      return sendError(
+        reply,
+        400,
+        "invalid_target",
+        "Enter a username or email.",
+      );
     }
     const result = await createChallenge(
       sessionUser,
@@ -27,7 +33,7 @@ export async function challengesRoutes(app: FastifyInstance) {
       app.log,
     );
     if (!result.ok) {
-      return reply.code(400).send(result);
+      return sendError(reply, 400, result.code, result.message);
     }
     return {
       challenge: result.challenge,
@@ -38,9 +44,9 @@ export async function challengesRoutes(app: FastifyInstance) {
   app.get("/challenges", async (req, reply) => {
     const sessionUser = await getSessionUser(req);
     if (!sessionUser) {
-      return reply.code(401).send({ error: "Sign in required" });
+      return sendError(reply, 401, "unauthorized", "Sign in required.");
     }
-    const challenges = await listUserChallenges(sessionUser.id);
+    const challenges = await listChallengesForSessionUser(sessionUser);
     return { challenges };
   });
 
@@ -49,14 +55,14 @@ export async function challengesRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const sessionUser = await getSessionUser(req);
       if (!sessionUser) {
-        return reply.code(401).send({ error: "Sign in required" });
+        return sendError(reply, 401, "unauthorized", "Sign in required.");
       }
       const challenge = await getChallengeForUser(
-        sessionUser.id,
+        sessionUser,
         req.params.id,
       );
       if (!challenge) {
-        return reply.code(404).send({ error: "Not found" });
+        return sendError(reply, 404, "not_found", "Challenge not found.");
       }
       return { challenge };
     },
@@ -67,11 +73,11 @@ export async function challengesRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const sessionUser = await getSessionUser(req);
       if (!sessionUser) {
-        return reply.code(401).send({ error: "Sign in required" });
+        return sendError(reply, 401, "unauthorized", "Sign in required.");
       }
       const result = await revokeChallenge(sessionUser.id, req.params.id);
       if (!result.ok) {
-        return reply.code(400).send(result);
+        return sendError(reply, 400, result.code, result.message);
       }
       return { ok: true };
     },
@@ -82,13 +88,13 @@ export async function challengesRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const sessionUser = await getSessionUser(req);
       if (!sessionUser) {
-        return reply.code(401).send({ error: "Sign in required" });
+        return sendError(reply, 401, "unauthorized", "Sign in required.");
       }
       const parsed = z
         .object({ accept: z.boolean() })
         .safeParse(req.body);
       if (!parsed.success) {
-        return reply.code(400).send({ error: "accept required" });
+        return sendError(reply, 400, "invalid_body", "Choose accept or decline.");
       }
       const result = await respondChallenge(
         sessionUser,
@@ -96,7 +102,7 @@ export async function challengesRoutes(app: FastifyInstance) {
         parsed.data.accept,
       );
       if (!result.ok) {
-        return reply.code(400).send(result);
+        return sendError(reply, 400, result.code, result.message);
       }
       return {
         ok: true,

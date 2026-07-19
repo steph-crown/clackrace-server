@@ -4,6 +4,7 @@ import { z } from "zod";
 import { getSessionUser } from "../auth/session.js";
 import { db } from "../db/client.js";
 import { user } from "../db/schema.js";
+import { sendError } from "../lib/api-error.js";
 import { CAR_COLOR_PALETTE } from "../lib/car-colors.js";
 import { getStreak } from "../lib/retention.js";
 
@@ -24,7 +25,7 @@ export async function meRoutes(app: FastifyInstance) {
   app.get("/me", async (req, reply) => {
     const sessionUser = await getSessionUser(req);
     if (!sessionUser) {
-      return reply.code(401).send({ error: "Unauthorized" });
+      return sendError(reply, 401, "unauthorized", "Sign in required.");
     }
     const streak = await getStreak(sessionUser.id);
     return {
@@ -42,11 +43,11 @@ export async function meRoutes(app: FastifyInstance) {
   app.patch("/me", async (req, reply) => {
     const sessionUser = await getSessionUser(req);
     if (!sessionUser) {
-      return reply.code(401).send({ error: "Unauthorized" });
+      return sendError(reply, 401, "unauthorized", "Sign in required.");
     }
     const parsed = patchSchema.safeParse(req.body);
     if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.flatten() });
+      return sendError(reply, 400, "invalid_body", "Check your settings and try again.");
     }
     const body = parsed.data;
 
@@ -55,7 +56,7 @@ export async function meRoutes(app: FastifyInstance) {
         body.carColor,
       );
       if (!ok) {
-        return reply.code(400).send({ error: "Invalid car color" });
+        return sendError(reply, 400, "invalid_color", "Pick a color from the palette.");
       }
     }
 
@@ -66,7 +67,7 @@ export async function meRoutes(app: FastifyInstance) {
         .where(eq(user.username, body.username.toLowerCase()))
         .limit(1);
       if (taken[0] && taken[0].id !== sessionUser.id) {
-        return reply.code(409).send({ error: "Username taken" });
+        return sendError(reply, 409, "username_taken", "That username is taken.");
       }
     }
 
@@ -88,7 +89,7 @@ export async function meRoutes(app: FastifyInstance) {
       .returning();
 
     if (!updated) {
-      return reply.code(500).send({ error: "Update failed" });
+      return sendError(reply, 500, "update_failed", "Couldn't save settings.");
     }
 
     return {
