@@ -159,7 +159,9 @@ export function attachRaceGateway(app: FastifyInstance) {
           const result = joinSession(session, {
             guestSessionToken: payload.guestSessionToken,
             suggestedName: payload.suggestedName,
+            // Guests: server assigns unique color. Locked colors arrive with Phase 5 accounts.
             carColor: payload.carColor,
+            lockedCarColor: false,
             socketId: socket.id,
           });
 
@@ -303,10 +305,18 @@ export function attachRaceGateway(app: FastifyInstance) {
           keystrokes: payload.keystrokes ?? [],
           durationMs: payload.durationMs,
         });
-        ack?.(result ? { ok: true, ...result } : { ok: false });
-        if (result) {
-          await maybeCompleteRace(io, session);
+        if (!result) {
+          ack?.({ ok: false });
+          return;
         }
+
+        const finisher = session.members.find((m) => m.id === data.memberId);
+        io.to(room(session.id)).emit("session:toast", {
+          message: `${finisher?.displayName ?? "Someone"} finished`,
+        });
+        broadcastState(io, session);
+        ack?.({ ok: true, ...result });
+        await maybeCompleteRace(io, session);
       },
     );
 

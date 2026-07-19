@@ -9,6 +9,7 @@ import {
   races,
 } from "../db/schema.js";
 import { assignUniqueName } from "../lib/anonymous-names.js";
+import { pickGuestCarColor } from "../lib/car-colors.js";
 import {
   accuracyFromMistakes,
   wpmFromKeystrokes,
@@ -23,16 +24,6 @@ import type {
 } from "./types.js";
 
 export const MAX_SESSION_PLAYERS = 8;
-const CAR_COLORS = [
-  "#2ee6d6",
-  "#ff3d8a",
-  "#f5c518",
-  "#7c6cff",
-  "#ff7a45",
-  "#3dd68c",
-  "#4da3ff",
-  "#e8e6e1",
-];
 
 export async function createPublicSession(guestSessionToken: string) {
   const id = generateSessionCode();
@@ -159,7 +150,12 @@ export function joinSession(
   opts: {
     guestSessionToken: string;
     suggestedName?: string;
+    /**
+     * Only honored when `lockedCarColor` is true (signed-in profile color).
+     * Guests always get a unique-in-session color from the palette.
+     */
     carColor?: string;
+    lockedCarColor?: boolean;
     socketId: string;
   },
 ): JoinResult {
@@ -185,13 +181,19 @@ export function joinSession(
     !session.members.some((m) => m.isCreator && !m.disconnected);
 
   const name = assignUniqueName(opts.suggestedName, takenNames(session));
-  const colorIndex = session.members.length % CAR_COLORS.length;
+  const takenColors = session.members
+    .filter((m) => !m.disconnected)
+    .map((m) => m.carColor);
+  const carColor =
+    opts.lockedCarColor && opts.carColor
+      ? opts.carColor
+      : pickGuestCarColor(takenColors);
   const pending = session.status === "racing";
 
   const member: LiveMember = {
     id: randomUUID(),
     displayName: name,
-    carColor: opts.carColor || CAR_COLORS[colorIndex]!,
+    carColor,
     guestSessionToken: opts.guestSessionToken,
     socketId: opts.socketId,
     isCreator,
