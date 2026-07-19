@@ -9,6 +9,8 @@ Single Node.js process: Fastify (REST + future SSE) + Socket.IO (Phase 4). Postg
 pnpm install
 
 # 2. Start Postgres + Redis
+# Postgres is published on host port 5433 (not 5432) so it won't clash
+# with a local Postgres install.
 docker compose up -d
 
 # 3. Env
