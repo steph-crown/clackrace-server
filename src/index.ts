@@ -1,8 +1,10 @@
 import "dotenv/config";
 import cors from "@fastify/cors";
 import Fastify from "fastify";
+import { attachRaceGateway } from "./realtime/gateway.js";
 import { pingRedis } from "./redis.js";
 import { passagesRoutes } from "./routes/passages.js";
+import { sessionsRoutes } from "./routes/sessions.js";
 import { soloResultsRoutes } from "./routes/solo-results.js";
 
 const port = Number(process.env.PORT ?? 4000);
@@ -31,6 +33,10 @@ app.get("/health", async () => {
 
 await app.register(passagesRoutes);
 await app.register(soloResultsRoutes);
+await app.register(sessionsRoutes);
+
+await app.ready();
+attachRaceGateway(app);
 
 try {
   await app.listen({ port, host });

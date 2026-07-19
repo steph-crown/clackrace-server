@@ -26,9 +26,19 @@ pnpm dev
 
 API defaults to `http://localhost:4000`.
 
-## Phase 3 endpoints
+## REST endpoints
 
 - `GET /health`
 - `GET /passages`
 - `GET /passages/:id`
-- `POST /races/solo/results` — persists guest solo CPU runs; WPM/accuracy recomputed server-side from keystrokes
+- `POST /races/solo/results` — guest solo CPU results (authoritative WPM)
+- `POST /sessions/public` — `{ guestSessionToken }` → `{ id }` shareable Race Code
+- `GET /sessions/:id` — lobby snapshot + taken guest names
+
+## Socket.IO (Phase 4)
+
+Attach to the same HTTP server. Client events: `session:join`, `session:leave`, `race:start`, `session:playAgain`, `session:end`, `race:position`, `race:finish`.
+
+Server events: `session:state`, `session:toast`, `session:error`, `race:countdown`, `race:start`, `race:positions` (~10Hz), `race:results`, `session:ended`.
+
+Initial race countdown: 3-2-1-GO. Rematch: 5-4-3-2-1-GO. Guest names: client suggests, server enforces uniqueness.

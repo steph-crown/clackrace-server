@@ -65,6 +65,8 @@ export const raceSessions = pgTable("race_sessions", {
   id: text("id").primaryKey(),
   visibility: visibilityEnum("visibility").notNull(),
   creatorUserId: uuid("creator_user_id").references(() => users.id),
+  /** Guest creator identity until accounts land (Phase 5). */
+  creatorGuestToken: text("creator_guest_token"),
   allowedUserIds: jsonb("allowed_user_ids").$type<string[]>(),
   status: sessionStatusEnum("status").notNull().default("waiting"),
   createdAt: timestamp("created_at", { withTimezone: true })
