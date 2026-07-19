@@ -32,6 +32,7 @@ export const cpuDifficultyEnum = pgEnum("cpu_difficulty", [
   "easy",
   "medium",
   "hard",
+  "expert",
 ]);
 export const leaderboardScopeEnum = pgEnum("leaderboard_scope", [
   "all_time",

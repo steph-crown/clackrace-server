@@ -18,7 +18,7 @@ const bodySchema = z.object({
   finalAccuracy: z.number().min(0).max(100),
   placement: z.number().int().positive(),
   participantCount: z.number().int().positive().max(8),
-  cpuDifficulty: z.enum(["easy", "medium", "hard"]),
+  cpuDifficulty: z.enum(["easy", "medium", "hard", "expert"]),
   cpuCount: z.number().int().min(1).max(7),
   durationMs: z.number().nonnegative(),
   mistakes: z.number().int().nonnegative(),
