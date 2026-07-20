@@ -2,9 +2,12 @@ import "dotenv/config";
 import cors from "@fastify/cors";
 import Fastify from "fastify";
 import { ensureSchema } from "./db/ensure-schema.js";
+import { seedAdminUser } from "./db/seed-admin.js";
 import { env } from "./env.js";
 import { attachRaceGateway } from "./realtime/gateway.js";
 import { pingRedis } from "./redis.js";
+import { adminRoutes } from "./routes/admin.js";
+import { analyticsRoutes } from "./routes/analytics.js";
 import { authRoutes } from "./routes/auth.js";
 import { challengesRoutes } from "./routes/challenges.js";
 import { claimRoutes } from "./routes/claim.js";
@@ -17,7 +20,6 @@ import { sessionsRoutes } from "./routes/sessions.js";
 import { socketTokenRoutes } from "./routes/socket-token.js";
 import { soloResultsRoutes } from "./routes/solo-results.js";
 import { statsRoutes } from "./routes/stats.js";
-import { adminRoutes } from "./routes/admin.js";
 
 const app = Fastify({
   logger: true,
@@ -26,8 +28,14 @@ const app = Fastify({
 try {
   await ensureSchema();
   app.log.info("Schema ensure OK");
+  const adminSeed = await seedAdminUser();
+  app.log.info(
+    adminSeed === "ok"
+      ? "Admin user seeded from env"
+      : "Admin seed skipped (ADMIN_USERNAME / ADMIN_PASSWORD unset)",
+  );
 } catch (err) {
-  app.log.error(err, "Schema ensure failed — migrate manually if needed");
+  app.log.error(err, "Schema ensure / admin seed failed — migrate manually if needed");
 }
 
 await app.register(cors, {
@@ -50,6 +58,7 @@ await app.register(meRoutes);
 await app.register(claimRoutes);
 await app.register(leaderboardRoutes);
 await app.register(statsRoutes);
+await app.register(analyticsRoutes);
 await app.register(adminRoutes);
 await app.register(challengesRoutes);
 await app.register(matchmakingRoutes);

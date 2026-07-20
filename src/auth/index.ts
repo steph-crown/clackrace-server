@@ -35,6 +35,12 @@ export const auth = betterAuth({
         type: "string",
         required: false,
       },
+      role: {
+        type: "string",
+        required: false,
+        defaultValue: "user",
+        input: false,
+      },
     },
   },
   databaseHooks: {
@@ -76,4 +82,5 @@ export type SessionUser = {
   carColor?: string | null;
   font?: string | null;
   avatar?: string | null;
+  role?: string | null;
 };

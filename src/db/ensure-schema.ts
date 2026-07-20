@@ -38,4 +38,31 @@ export async function ensureSchema(): Promise<void> {
       UNIQUE (user_id, difficulty)
     );
   `);
+
+  await db.execute(sql`
+    ALTER TABLE "user"
+      ADD COLUMN IF NOT EXISTS role text NOT NULL DEFAULT 'user';
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS analytics_events (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      name text NOT NULL,
+      user_id text REFERENCES "user"(id) ON DELETE SET NULL,
+      guest_session_token text,
+      session_id text,
+      props jsonb NOT NULL DEFAULT '{}'::jsonb,
+      path text,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS analytics_events_name_created_idx
+      ON analytics_events (name, created_at DESC);
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS analytics_events_created_idx
+      ON analytics_events (created_at DESC);
+  `);
 }

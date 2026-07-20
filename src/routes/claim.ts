@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getSessionUser } from "../auth/session.js";
+import { trackEvent } from "../lib/analytics.js";
 import { sendError } from "../lib/api-error.js";
 import { claimGuestRuns, getStreak } from "../lib/retention.js";
 
@@ -23,6 +24,12 @@ export async function claimRoutes(app: FastifyInstance) {
       parsed.data.guestSessionToken,
     );
     const streak = await getStreak(sessionUser.id);
+    void trackEvent({
+      name: "auth.guest_claim",
+      userId: sessionUser.id,
+      guestSessionToken: parsed.data.guestSessionToken,
+      props: { claimed: result.claimed },
+    });
 
     return {
       claimed: result.claimed,

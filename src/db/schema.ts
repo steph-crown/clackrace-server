@@ -61,6 +61,8 @@ export const user = pgTable("user", {
   carColor: text("car_color").notNull().default("#2ee6d6"),
   font: text("font"),
   avatar: text("avatar"),
+  /** `user` | `admin` — only env-seeded account should be admin. */
+  role: text("role").notNull().default("user"),
 });
 
 /** @deprecated alias — prefer `user` */
@@ -253,6 +255,20 @@ export const dailyChampions = pgTable("daily_champions", {
     .notNull()
     .references(() => user.id),
   bestWpm: real("best_wpm").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+/** Append-only first-party analytics (Phase 9). */
+export const analyticsEvents = pgTable("analytics_events", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
+  guestSessionToken: text("guest_session_token"),
+  sessionId: text("session_id"),
+  props: jsonb("props").$type<Record<string, unknown>>().notNull().default({}),
+  path: text("path"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

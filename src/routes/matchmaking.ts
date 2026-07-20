@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getSessionUser } from "../auth/session.js";
+import { trackEvent } from "../lib/analytics.js";
 import { sendError } from "../lib/api-error.js";
 import {
   cancelTicket,
@@ -26,6 +27,13 @@ export async function matchmakingRoutes(app: FastifyInstance) {
     if (!result.ok) {
       return sendError(reply, 400, result.code, result.message);
     }
+    void trackEvent({
+      name: "quick.queue_enter",
+      userId: sessionUser?.id ?? null,
+      guestSessionToken: parsed.data.guestSessionToken,
+      sessionId: result.sessionId,
+      props: { status: result.status },
+    });
     return result;
   });
 

@@ -48,7 +48,11 @@ export const env = {
   /** Optional — challenge invite emails via Resend free tier */
   resendApiKey: process.env.RESEND_API_KEY,
   emailFrom: process.env.EMAIL_FROM ?? "ClackRace <onboarding@resend.dev>",
-  /** Optional — enables GET /admin/shadow-holds */
+  /** Optional — enables GET /admin/shadow-holds (legacy token gate) */
   adminToken: process.env.ADMIN_TOKEN,
+  /** Sole admin account seeded on boot (required for /nimad) */
+  adminUsername: process.env.ADMIN_USERNAME,
+  adminPassword: process.env.ADMIN_PASSWORD,
+  adminEmail: process.env.ADMIN_EMAIL,
 } as const;
 
