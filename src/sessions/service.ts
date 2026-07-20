@@ -210,6 +210,7 @@ export function snapshotFor(
       ? {
           endsAt: session.commit.endsAt,
           promptedByName: session.commit.promptedByName,
+          promptedByMemberId: session.commit.promptedByMemberId,
           readyMemberIds: [...session.commit.readyMemberIds],
         }
       : null,

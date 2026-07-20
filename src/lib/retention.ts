@@ -14,6 +14,7 @@ import {
   serializeCosmetics,
   type CosmeticBadge,
 } from "./cosmetics.js";
+import { reconcilePersonalBests } from "./personal-bests.js";
 
 async function unlockBadges(userId: string, add: CosmeticBadge[]) {
   if (add.length === 0) return;
@@ -272,6 +273,8 @@ export async function claimGuestRuns(
       );
     }
   }
+
+  await reconcilePersonalBests(userId);
 
   return { claimed: rows.length };
 }

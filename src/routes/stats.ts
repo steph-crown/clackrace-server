@@ -7,6 +7,7 @@ import {
   getGhostForDifficulty,
   getPersonalBests,
   getStatsHistory,
+  reconcilePersonalBests,
 } from "../lib/personal-bests.js";
 
 export async function statsRoutes(app: FastifyInstance) {
@@ -15,6 +16,9 @@ export async function statsRoutes(app: FastifyInstance) {
     if (!sessionUser) {
       return sendError(reply, 401, "unauthorized", "Sign in to view stats.");
     }
+
+    // Heal PBs that missed historical runs (e.g. races before PB tracking).
+    await reconcilePersonalBests(sessionUser.id);
 
     const [history, pbs, elo] = await Promise.all([
       getStatsHistory(sessionUser.id),
@@ -35,7 +39,8 @@ export async function statsRoutes(app: FastifyInstance) {
       .map((h) => ({
         wpm: h.wpm!,
         accuracy: h.accuracy ?? 0,
-        at: h.startedAt.toISOString(),
+        // Finish time when available — when the run was posted.
+        at: (h.endedAt ?? h.startedAt).toISOString(),
         mode: h.mode,
       }))
       .reverse();
@@ -80,7 +85,7 @@ export async function statsRoutes(app: FastifyInstance) {
         reply,
         404,
         "no_pb",
-        "No personal best on this difficulty yet. Race CPU first.",
+        "No personal best on this difficulty yet. Finish a race to set one.",
       );
     }
     return {

@@ -108,6 +108,7 @@ export type SessionSnapshot = {
   commit: {
     endsAt: number;
     promptedByName: string;
+    promptedByMemberId: string;
     readyMemberIds: string[];
   } | null;
   maxPlayers: number;

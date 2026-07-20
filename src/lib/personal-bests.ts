@@ -1,6 +1,7 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, gt, sql } from "drizzle-orm";
 import { db } from "../db/client.js";
 import {
+  keystrokeLogs,
   passages,
   personalBests,
   raceParticipants,
@@ -70,6 +71,60 @@ export async function maybeUpdatePersonalBest(opts: {
   return true;
 }
 
+/**
+ * Rebuild PBs from historical verified runs (keystroke-retained).
+ * Fixes gaps when races finished before PB tracking existed, or after claim.
+ */
+export async function reconcilePersonalBests(userId: string): Promise<void> {
+  const candidates = await db
+    .select({
+      participantId: raceParticipants.id,
+      wpm: raceParticipants.finalWpm,
+      accuracy: raceParticipants.finalAccuracy,
+      passageId: races.passageId,
+      difficulty: passages.difficulty,
+      strokes: keystrokeLogs.strokes,
+    })
+    .from(raceParticipants)
+    .innerJoin(races, eq(raceParticipants.raceId, races.id))
+    .innerJoin(passages, eq(races.passageId, passages.id))
+    .innerJoin(
+      keystrokeLogs,
+      eq(keystrokeLogs.raceParticipantId, raceParticipants.id),
+    )
+    .where(
+      and(
+        eq(raceParticipants.userId, userId),
+        eq(raceParticipants.shadowHeld, false),
+        gt(raceParticipants.finalWpm, 0),
+        sql`${raceParticipants.disconnected} = false`,
+      ),
+    )
+    .orderBy(desc(raceParticipants.finalWpm));
+
+  const bestByDifficulty = new Map<
+    Difficulty,
+    (typeof candidates)[number]
+  >();
+  for (const row of candidates) {
+    if (row.wpm == null || row.strokes.length === 0) continue;
+    const d = row.difficulty as Difficulty;
+    if (!bestByDifficulty.has(d)) bestByDifficulty.set(d, row);
+  }
+
+  for (const row of bestByDifficulty.values()) {
+    await maybeUpdatePersonalBest({
+      userId,
+      participantId: row.participantId,
+      passageId: row.passageId,
+      wpm: row.wpm!,
+      accuracy: row.accuracy ?? 100,
+      keystrokes: row.strokes,
+      shadowHeld: false,
+    });
+  }
+}
+
 export async function getPersonalBests(userId: string) {
   return db
     .select({
@@ -116,6 +171,7 @@ export async function getStatsHistory(userId: string, limit = 40) {
       accuracy: raceParticipants.finalAccuracy,
       mistypeCounts: raceParticipants.mistypeCounts,
       startedAt: races.startedAt,
+      endedAt: races.endedAt,
       mode: races.mode,
       shadowHeld: raceParticipants.shadowHeld,
     })
