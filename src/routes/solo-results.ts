@@ -15,6 +15,7 @@ import {
 } from "../lib/anti-cheat.js";
 import { maybeUpdatePersonalBest } from "../lib/personal-bests.js";
 import { accuracyFromMistakes, wpmFromKeystrokes } from "../lib/stats.js";
+import { assignUniqueName } from "../lib/anonymous-names.js";
 import { recordSignedInResult } from "../lib/retention.js";
 
 const bodySchema = z.object({
@@ -114,7 +115,9 @@ export async function soloResultsRoutes(app: FastifyInstance) {
       .values({
         raceId: race.id,
         userId: sessionUser?.id ?? null,
-        anonymousName: null,
+        anonymousName: sessionUser
+          ? null
+          : assignUniqueName(undefined, new Set()),
         guestSessionToken: body.guestSessionToken,
         carColor,
         isCpu: false,

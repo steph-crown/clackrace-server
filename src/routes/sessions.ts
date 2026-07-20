@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   createPublicSession,
   ensureLiveSession,
+  maxPlayersFor,
   publicMembers,
   takenNames,
 } from "../sessions/service.js";
@@ -27,6 +28,20 @@ export async function sessionsRoutes(app: FastifyInstance) {
     if (!session || session.status === "ended") {
       return reply.code(404).send({ error: "Race session not found" });
     }
+    // Challenge: don't leak roster / joinability to third parties via REST.
+    if (session.visibility === "challenge") {
+      return {
+        id: session.id,
+        status: session.status,
+        visibility: session.visibility,
+        members: [],
+        takenNames: [],
+        leaderboard: [],
+        rematch: null,
+        playerCount: 0,
+        maxPlayers: 2,
+      };
+    }
     return {
       id: session.id,
       status: session.status,
@@ -36,7 +51,7 @@ export async function sessionsRoutes(app: FastifyInstance) {
       leaderboard: session.leaderboard,
       rematch: session.rematch,
       playerCount: session.members.filter((m) => !m.disconnected).length,
-      maxPlayers: 8,
+      maxPlayers: maxPlayersFor(session),
     };
   });
 }

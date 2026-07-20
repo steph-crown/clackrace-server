@@ -33,36 +33,47 @@ async function getOrCreateRating(userId: string) {
 
 function scoreFromPlacement(placement: number, fieldSize: number): number {
   if (fieldSize <= 1) return 0.5;
-  // 1st → 1, last → 0, linear
+  // 1st → 1, last → 0, linear (placement is among ELO-eligible only)
   return (fieldSize - placement) / (fieldSize - 1);
 }
 
 /**
  * Update ELO for a race with 2+ logged-in humans (PRD §9).
  * CPU / solo races must not call this.
+ * Re-ranks by finish order among competitors only (ignores guest placements).
  */
 export async function updateEloForRace(
   competitors: EloCompetitor[],
 ): Promise<void> {
   if (competitors.length < 2) return;
 
+  const ranked = [...competitors].sort((a, b) => a.placement - b.placement);
+  const fieldSize = ranked.length;
+  const eloPlace = new Map<string, number>();
+  ranked.forEach((c, i) => eloPlace.set(c.userId, i + 1));
+
   const ratings = new Map<string, Awaited<ReturnType<typeof getOrCreateRating>>>();
   for (const c of competitors) {
     ratings.set(c.userId, await getOrCreateRating(c.userId));
   }
 
-  const fieldSize = competitors.length;
-  const updates: { userId: string; rating: number; racesCounted: number; kFactorTier: string }[] =
-    [];
+  const updates: {
+    userId: string;
+    rating: number;
+    racesCounted: number;
+    kFactorTier: string;
+  }[] = [];
 
   for (const c of competitors) {
     const me = ratings.get(c.userId)!;
     const others = competitors.filter((o) => o.userId !== c.userId);
     const oppAvg =
-      others.reduce((sum, o) => sum + (ratings.get(o.userId)?.rating ?? BASE), 0) /
-      others.length;
+      others.reduce(
+        (sum, o) => sum + (ratings.get(o.userId)?.rating ?? BASE),
+        0,
+      ) / others.length;
     const E = 1 / (1 + 10 ** ((oppAvg - me.rating) / 400));
-    const S = scoreFromPlacement(c.placement, fieldSize);
+    const S = scoreFromPlacement(eloPlace.get(c.userId)!, fieldSize);
     const K =
       me.racesCounted < PROVISIONAL_RACES ? K_PROVISIONAL : K_ESTABLISHED;
     const nextRating = me.rating + K * (S - E);

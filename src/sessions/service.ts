@@ -8,7 +8,7 @@ import {
   raceSessions,
   races,
 } from "../db/schema.js";
-import { assignUniqueName } from "../lib/anonymous-names.js";
+import { assignDisplayName } from "../lib/anonymous-names.js";
 import { pickGuestCarColor } from "../lib/car-colors.js";
 import {
   evaluateAntiCheat,
@@ -298,6 +298,17 @@ export function joinSession(
   if (existing) {
     existing.socketId = opts.socketId;
     if (opts.userId) existing.userId = opts.userId;
+    if (opts.displayUsername?.trim()) {
+      const others = new Set(
+        session.members
+          .filter((m) => m.id !== existing.id && !m.disconnected)
+          .map((m) => m.displayName),
+      );
+      existing.displayName = assignDisplayName(
+        { signedInUsername: opts.displayUsername },
+        others,
+      );
+    }
     if (opts.lockedCarColor && opts.carColor) {
       existing.carColor = opts.carColor;
     }
@@ -338,9 +349,13 @@ export function joinSession(
       session.creatorGuestToken.length > 0 &&
       !session.members.some((m) => m.isCreator && !m.disconnected));
 
-  const name = opts.displayUsername
-    ? assignUniqueName(opts.displayUsername, takenNames(session))
-    : assignUniqueName(opts.suggestedName, takenNames(session));
+  const name = assignDisplayName(
+    {
+      signedInUsername: opts.displayUsername,
+      suggestedGuestName: opts.suggestedName,
+    },
+    takenNames(session),
+  );
   const takenColors = session.members
     .filter((m) => !m.disconnected)
     .map((m) => m.carColor);

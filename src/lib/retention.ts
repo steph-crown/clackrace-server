@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { db } from "../db/client.js";
 import {
   dailyChampions,
@@ -230,6 +230,7 @@ export async function claimGuestRuns(
     .select({
       id: raceParticipants.id,
       finalWpm: raceParticipants.finalWpm,
+      shadowHeld: raceParticipants.shadowHeld,
       createdAt: raceParticipants.createdAt,
       raceStartedAt: races.startedAt,
     })
@@ -267,6 +268,7 @@ export async function claimGuestRuns(
         userId,
         r.finalWpm,
         r.raceStartedAt ?? r.createdAt,
+        { shadowHeld: !!r.shadowHeld },
       );
     }
   }
@@ -277,6 +279,7 @@ export async function claimGuestRuns(
 export async function getLeaderboard(scope: "all_time" | "daily" | "weekly") {
   const weekStart = startOfUtcWeek();
   const today = utcDay();
+  const dayStart = new Date(`${today}T00:00:00.000Z`);
 
   const rows = await db
     .select({
@@ -289,15 +292,23 @@ export async function getLeaderboard(scope: "all_time" | "daily" | "weekly") {
     })
     .from(leaderboardEntries)
     .innerJoin(user, eq(leaderboardEntries.userId, user.id))
-    .where(eq(leaderboardEntries.scope, scope))
+    .where(
+      scope === "daily"
+        ? and(
+            eq(leaderboardEntries.scope, scope),
+            gte(leaderboardEntries.achievedAt, dayStart),
+          )
+        : scope === "weekly"
+          ? and(
+              eq(leaderboardEntries.scope, scope),
+              gte(leaderboardEntries.achievedAt, weekStart),
+            )
+          : eq(leaderboardEntries.scope, scope),
+    )
     .orderBy(desc(leaderboardEntries.bestWpm))
     .limit(50);
 
-  return rows.filter((r) => {
-    if (scope === "daily") return utcDay(r.achievedAt) === today;
-    if (scope === "weekly") return r.achievedAt.getTime() >= weekStart.getTime();
-    return true;
-  });
+  return rows;
 }
 
 export async function getDailyChampion() {

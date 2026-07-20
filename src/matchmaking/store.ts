@@ -103,9 +103,23 @@ export async function markAssigned(
       /* ignore */
     }
   }
-  // Drop from searching queue view after a short grace for client poll
+  // Drop ticket; if assignee never joined, free the reserved seat.
   setTimeout(() => {
-    void removeTicket(ticketId);
+    void (async () => {
+      await removeTicket(ticketId);
+      const { releaseReserve, onMatchmadeWaiting } = await import("./service.js");
+      const { getLiveSession } = await import("../sessions/store.js");
+      const session = getLiveSession(sessionId);
+      if (!session || session.visibility !== "matchmade") return;
+      const joined = session.members.some(
+        (m) =>
+          !m.disconnected && m.guestSessionToken === t.guestSessionToken,
+      );
+      if (!joined && session.reservedSeats > 0) {
+        releaseReserve(session);
+        await onMatchmadeWaiting(session);
+      }
+    })();
   }, 30_000);
 }
 
