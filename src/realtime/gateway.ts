@@ -6,7 +6,9 @@ import { COMMIT_MS } from "../matchmaking/store.js";
 import {
   onMatchmadeEmptyOrRacing,
   onMatchmadeWaiting,
+  enqueue,
 } from "../matchmaking/service.js";
+import { takeRequeueSlot } from "../matchmaking/requeue.js";
 import {
   beginRace,
   completeRace,
@@ -150,8 +152,43 @@ async function finishCommit(io: Server, session: LiveSession) {
     io.to(room(session.id)).emit("session:toast", {
       message: "Not enough racers — searching again…",
     });
+    // PRD: survivor is re-queued once (leave this session, re-enter MM).
+    for (const member of active) {
+      const socketId = member.socketId;
+      const guestSessionToken = member.guestSessionToken;
+      const userId = member.userId;
+      leaveSession(session, member.id);
+      if (!socketId) continue;
+      const sock = io.sockets.sockets.get(socketId);
+      if (sock) {
+        const sd = sock.data as SocketData;
+        sd.sessionId = undefined;
+        sd.memberId = undefined;
+        void sock.leave(room(session.id));
+      }
+      if (!takeRequeueSlot(guestSessionToken)) {
+        io.to(socketId).emit("matchmaking:alone", {
+          message:
+            "Still alone — try Open Race or Race CPU while you wait.",
+        });
+        continue;
+      }
+      const ticket = await enqueue({
+        guestSessionToken,
+        userId,
+        requeued: true,
+      });
+      if (ticket.ok) {
+        io.to(socketId).emit("matchmaking:requeued", {
+          ticketId: ticket.ticketId,
+          status: ticket.status,
+          sessionId: ticket.sessionId,
+          expiresAt: ticket.expiresAt,
+        });
+      }
+    }
     broadcastState(io, session);
-    await onMatchmadeWaiting(session);
+    await maybeEndEmptyMatchmade(io, session);
     return;
   }
   clearCommit(session);

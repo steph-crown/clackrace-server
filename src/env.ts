@@ -48,5 +48,7 @@ export const env = {
   /** Optional — challenge invite emails via Resend free tier */
   resendApiKey: process.env.RESEND_API_KEY,
   emailFrom: process.env.EMAIL_FROM ?? "ClackRace <onboarding@resend.dev>",
+  /** Optional — enables GET /admin/shadow-holds */
+  adminToken: process.env.ADMIN_TOKEN,
 } as const;
 

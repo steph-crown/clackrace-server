@@ -34,15 +34,19 @@ export async function sendChallengeInviteEmail(opts: {
       ? `${opts.fromUsername} invited you to race on ClackRace`
       : `${opts.fromUsername} challenged you on ClackRace`;
 
+  const reportBlock = `<p style="margin-top:24px;font-size:12px;color:#666">Didn't expect this? <a href="mailto:hello@clackrace.com?subject=${encodeURIComponent(`Report challenge from ${opts.fromUsername}`)}&body=${encodeURIComponent(`Please review or block invites from ${opts.fromUsername}.\n\nRecipient: ${opts.to}`)}">Report or block</a> this sender.</p>`;
+
   const html =
     opts.kind === "signup"
       ? `<p><strong>${opts.fromUsername}</strong> challenged you to a typing race on ClackRace.</p>
 <p>Create a free account to accept — you'll land right in the challenge.</p>
 <p><a href="${opts.acceptPath}">Sign up &amp; accept</a></p>
-<p>This invite expires soon.</p>`
+<p>This invite expires soon.</p>
+${reportBlock}`
       : `<p><strong>${opts.fromUsername}</strong> challenged you to a typing race.</p>
 <p><a href="${opts.acceptPath}">Accept the challenge</a></p>
-<p>This invite expires soon.</p>`;
+<p>This invite expires soon.</p>
+${reportBlock}`;
 
   if (!env.resendApiKey) {
     opts.log.info(

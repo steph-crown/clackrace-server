@@ -6,6 +6,7 @@ import { db } from "../db/client.js";
 import { user } from "../db/schema.js";
 import { sendError } from "../lib/api-error.js";
 import { CAR_COLOR_PALETTE } from "../lib/car-colors.js";
+import { parseCosmetics, STREAK_MILESTONES } from "../lib/cosmetics.js";
 import { getStreak } from "../lib/retention.js";
 
 const TYPING_FONTS = [
@@ -28,12 +29,24 @@ export async function meRoutes(app: FastifyInstance) {
       return sendError(reply, 401, "unauthorized", "Sign in required.");
     }
     const streak = await getStreak(sessionUser.id);
+    const cosmetics = parseCosmetics(sessionUser.avatar);
     return {
       user: sessionUser,
       streak: {
         current: streak.currentStreak,
         longest: streak.longestStreak,
         lastPlayedDate: streak.lastPlayedDate,
+      },
+      cosmetics: {
+        badges: cosmetics.badges,
+        milestones: STREAK_MILESTONES.map((n) => ({
+          days: n,
+          unlocked:
+            streak.longestStreak >= n ||
+            cosmetics.badges.includes(
+              n === 7 ? "streak-7" : n === 30 ? "streak-30" : "streak-100",
+            ),
+        })),
       },
       fonts: TYPING_FONTS,
       carColors: CAR_COLOR_PALETTE,
@@ -47,7 +60,12 @@ export async function meRoutes(app: FastifyInstance) {
     }
     const parsed = patchSchema.safeParse(req.body);
     if (!parsed.success) {
-      return sendError(reply, 400, "invalid_body", "Check your settings and try again.");
+      return sendError(
+        reply,
+        400,
+        "invalid_body",
+        "Check your settings and try again.",
+      );
     }
     const body = parsed.data;
 
@@ -56,7 +74,12 @@ export async function meRoutes(app: FastifyInstance) {
         body.carColor,
       );
       if (!ok) {
-        return sendError(reply, 400, "invalid_color", "Pick a color from the palette.");
+        return sendError(
+          reply,
+          400,
+          "invalid_color",
+          "Pick a color from the palette.",
+        );
       }
     }
 
@@ -67,7 +90,12 @@ export async function meRoutes(app: FastifyInstance) {
         .where(eq(user.username, body.username.toLowerCase()))
         .limit(1);
       if (taken[0] && taken[0].id !== sessionUser.id) {
-        return sendError(reply, 409, "username_taken", "That username is taken.");
+        return sendError(
+          reply,
+          409,
+          "username_taken",
+          "That username is taken.",
+        );
       }
     }
 

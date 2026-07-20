@@ -8,6 +8,31 @@ import {
   streaks,
   user,
 } from "../db/schema.js";
+import {
+  badgesForStreak,
+  parseCosmetics,
+  serializeCosmetics,
+  type CosmeticBadge,
+} from "./cosmetics.js";
+
+async function unlockBadges(userId: string, add: CosmeticBadge[]) {
+  if (add.length === 0) return;
+  const [row] = await db
+    .select({ avatar: user.avatar })
+    .from(user)
+    .where(eq(user.id, userId))
+    .limit(1);
+  const current = parseCosmetics(row?.avatar);
+  const next = [...new Set([...current.badges, ...add])];
+  if (next.length === current.badges.length) return;
+  await db
+    .update(user)
+    .set({
+      avatar: serializeCosmetics({ badges: next }),
+      updatedAt: new Date(),
+    })
+    .where(eq(user.id, userId));
+}
 
 function utcDay(d = new Date()): string {
   return d.toISOString().slice(0, 10);
@@ -150,6 +175,7 @@ export async function bumpStreak(userId: string, day: string): Promise<void> {
       longestStreak: 1,
       lastPlayedDate: day,
     });
+    await unlockBadges(userId, badgesForStreak(1));
     return;
   }
 
@@ -169,6 +195,7 @@ export async function bumpStreak(userId: string, day: string): Promise<void> {
       lastPlayedDate: day,
     })
     .where(eq(streaks.userId, userId));
+  await unlockBadges(userId, badgesForStreak(Math.max(row.longestStreak, next)));
 }
 
 async function maybeSetDailyChampion(
@@ -183,6 +210,7 @@ async function maybeSetDailyChampion(
     .limit(1);
   if (!champ) {
     await db.insert(dailyChampions).values({ day, userId, bestWpm: wpm });
+    await unlockBadges(userId, ["champion-crown"]);
     return;
   }
   if (wpm > champ.bestWpm) {
@@ -190,6 +218,7 @@ async function maybeSetDailyChampion(
       .update(dailyChampions)
       .set({ userId, bestWpm: wpm })
       .where(eq(dailyChampions.day, day));
+    await unlockBadges(userId, ["champion-crown"]);
   }
 }
 

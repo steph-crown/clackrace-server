@@ -17,6 +17,7 @@ import { sessionsRoutes } from "./routes/sessions.js";
 import { socketTokenRoutes } from "./routes/socket-token.js";
 import { soloResultsRoutes } from "./routes/solo-results.js";
 import { statsRoutes } from "./routes/stats.js";
+import { adminRoutes } from "./routes/admin.js";
 
 const app = Fastify({
   logger: true,
@@ -49,6 +50,7 @@ await app.register(meRoutes);
 await app.register(claimRoutes);
 await app.register(leaderboardRoutes);
 await app.register(statsRoutes);
+await app.register(adminRoutes);
 await app.register(challengesRoutes);
 await app.register(matchmakingRoutes);
 await app.register(notificationsRoutes);
