@@ -1,11 +1,10 @@
 import type { FastifyInstance } from "fastify";
-import { z } from "zod";
 import { getSessionUser } from "../auth/session.js";
 import { sendError } from "../lib/api-error.js";
 import { getUserElo } from "../lib/elo.js";
 import {
-  getGhostForDifficulty,
-  getPersonalBests,
+  getGhostForBest,
+  getOverallPersonalBest,
   getStatsHistory,
   reconcilePersonalBests,
 } from "../lib/personal-bests.js";
@@ -20,9 +19,9 @@ export async function statsRoutes(app: FastifyInstance) {
     // Heal PBs that missed historical runs (e.g. races before PB tracking).
     await reconcilePersonalBests(sessionUser.id);
 
-    const [history, pbs, elo] = await Promise.all([
+    const [history, pb, elo] = await Promise.all([
       getStatsHistory(sessionUser.id),
-      getPersonalBests(sessionUser.id),
+      getOverallPersonalBest(sessionUser.id),
       getUserElo(sessionUser.id),
     ]);
 
@@ -39,7 +38,6 @@ export async function statsRoutes(app: FastifyInstance) {
       .map((h) => ({
         wpm: h.wpm!,
         accuracy: h.accuracy ?? 0,
-        // Finish time when available — when the run was posted.
         at: (h.endedAt ?? h.startedAt).toISOString(),
         mode: h.mode,
       }))
@@ -52,13 +50,14 @@ export async function statsRoutes(app: FastifyInstance) {
         kFactorTier: elo.kFactorTier,
       },
       series,
-      personalBests: pbs.map((p) => ({
-        difficulty: p.difficulty,
-        bestWpm: Math.round(p.bestWpm * 10) / 10,
-        bestAccuracy: Math.round(p.bestAccuracy * 10) / 10,
-        passageId: p.passageId,
-        achievedAt: p.achievedAt.toISOString(),
-      })),
+      personalBest: pb
+        ? {
+            wpm: Math.round(pb.bestWpm * 10) / 10,
+            accuracy: Math.round(pb.bestAccuracy * 10) / 10,
+            mode: pb.mode,
+            achievedAt: pb.achievedAt.toISOString(),
+          }
+        : null,
       mistypeHeatmap: heatmap,
     };
   });
@@ -66,35 +65,25 @@ export async function statsRoutes(app: FastifyInstance) {
   app.get("/stats/ghost", async (req, reply) => {
     const sessionUser = await getSessionUser(req);
     if (!sessionUser) {
-      return sendError(reply, 401, "unauthorized", "Sign in to race a ghost.");
+      return sendError(reply, 401, "unauthorized", "Sign in to race your best.");
     }
-    const parsed = z
-      .object({
-        difficulty: z.enum(["easy", "medium", "hard"]).default("medium"),
-      })
-      .safeParse(req.query);
-    if (!parsed.success) {
-      return sendError(reply, 400, "invalid", "Invalid difficulty.");
-    }
-    const ghost = await getGhostForDifficulty(
-      sessionUser.id,
-      parsed.data.difficulty,
-    );
+    const ghost = await getGhostForBest(sessionUser.id);
     if (!ghost) {
       return sendError(
         reply,
         404,
         "no_pb",
-        "No personal best on this difficulty yet. Finish a race to set one.",
+        "No personal best yet. Finish a race to set one.",
       );
     }
     return {
-      difficulty: ghost.difficulty,
       bestWpm: ghost.bestWpm,
       bestAccuracy: ghost.bestAccuracy,
       passageId: ghost.passageId,
       passageText: ghost.passageText,
       strokes: ghost.strokes,
+      mode: ghost.mode,
+      difficulty: ghost.difficulty,
     };
   });
 }

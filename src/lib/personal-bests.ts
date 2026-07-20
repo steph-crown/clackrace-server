@@ -18,6 +18,7 @@ export async function maybeUpdatePersonalBest(opts: {
   accuracy: number;
   keystrokes: { charIndex: number; timestampMs: number }[];
   shadowHeld: boolean;
+  achievedAt?: Date;
 }): Promise<boolean> {
   if (opts.shadowHeld || opts.wpm <= 0 || opts.keystrokes.length === 0) {
     return false;
@@ -31,6 +32,7 @@ export async function maybeUpdatePersonalBest(opts: {
   if (!passage) return false;
 
   const difficulty = passage.difficulty as Difficulty;
+  const achievedAt = opts.achievedAt ?? new Date();
   const [existing] = await db
     .select()
     .from(personalBests)
@@ -53,7 +55,7 @@ export async function maybeUpdatePersonalBest(opts: {
         raceParticipantId: opts.participantId,
         passageId: opts.passageId,
         strokes: opts.keystrokes,
-        achievedAt: new Date(),
+        achievedAt,
       })
       .where(eq(personalBests.id, existing.id));
   } else {
@@ -65,7 +67,7 @@ export async function maybeUpdatePersonalBest(opts: {
       raceParticipantId: opts.participantId,
       passageId: opts.passageId,
       strokes: opts.keystrokes,
-      achievedAt: new Date(),
+      achievedAt,
     });
   }
   return true;
@@ -84,6 +86,7 @@ export async function reconcilePersonalBests(userId: string): Promise<void> {
       passageId: races.passageId,
       difficulty: passages.difficulty,
       strokes: keystrokeLogs.strokes,
+      startedAt: races.startedAt,
     })
     .from(raceParticipants)
     .innerJoin(races, eq(raceParticipants.raceId, races.id))
@@ -121,47 +124,41 @@ export async function reconcilePersonalBests(userId: string): Promise<void> {
       accuracy: row.accuracy ?? 100,
       keystrokes: row.strokes,
       shadowHeld: false,
+      achievedAt: row.startedAt,
     });
   }
 }
 
-export async function getPersonalBests(userId: string) {
-  return db
-    .select({
-      difficulty: personalBests.difficulty,
-      bestWpm: personalBests.bestWpm,
-      bestAccuracy: personalBests.bestAccuracy,
-      passageId: personalBests.passageId,
-      achievedAt: personalBests.achievedAt,
-    })
-    .from(personalBests)
-    .where(eq(personalBests.userId, userId))
-    .orderBy(desc(personalBests.bestWpm));
-}
-
-export async function getGhostForDifficulty(
-  userId: string,
-  difficulty: Difficulty,
-) {
+/** Single overall personal best (highest verified WPM), with race mode. */
+export async function getOverallPersonalBest(userId: string) {
   const [row] = await db
     .select({
       bestWpm: personalBests.bestWpm,
       bestAccuracy: personalBests.bestAccuracy,
       passageId: personalBests.passageId,
+      // Prefer race start — PB.achievedAt can be stale after reconcile.
+      achievedAt: races.startedAt,
+      mode: races.mode,
       strokes: personalBests.strokes,
       passageText: passages.text,
       difficulty: personalBests.difficulty,
     })
     .from(personalBests)
     .innerJoin(passages, eq(personalBests.passageId, passages.id))
-    .where(
-      and(
-        eq(personalBests.userId, userId),
-        eq(personalBests.difficulty, difficulty),
-      ),
+    .innerJoin(
+      raceParticipants,
+      eq(personalBests.raceParticipantId, raceParticipants.id),
     )
+    .innerJoin(races, eq(raceParticipants.raceId, races.id))
+    .where(eq(personalBests.userId, userId))
+    .orderBy(desc(personalBests.bestWpm))
     .limit(1);
   return row ?? null;
+}
+
+/** Ghost replay payload — overall PB keystroke log (not per-difficulty). */
+export async function getGhostForBest(userId: string) {
+  return getOverallPersonalBest(userId);
 }
 
 export async function getStatsHistory(userId: string, limit = 40) {
