@@ -9,6 +9,11 @@ import {
   raceParticipants,
   races,
 } from "../db/schema.js";
+import {
+  evaluateAntiCheat,
+  shouldRetainKeystrokes,
+} from "../lib/anti-cheat.js";
+import { maybeUpdatePersonalBest } from "../lib/personal-bests.js";
 import { accuracyFromMistakes, wpmFromKeystrokes } from "../lib/stats.js";
 import { recordSignedInResult } from "../lib/retention.js";
 
@@ -20,10 +25,12 @@ const bodySchema = z.object({
   finalAccuracy: z.number().min(0).max(100),
   placement: z.number().int().positive(),
   participantCount: z.number().int().positive().max(8),
-  cpuDifficulty: z.enum(["easy", "medium", "hard", "expert"]),
-  cpuCount: z.number().int().min(1).max(7),
+  cpuDifficulty: z.enum(["easy", "medium", "hard", "expert"]).optional(),
+  cpuCount: z.number().int().min(0).max(7).optional(),
+  mode: z.enum(["solo_cpu", "solo_ghost"]).optional(),
   durationMs: z.number().nonnegative(),
   mistakes: z.number().int().nonnegative(),
+  mistypeCounts: z.record(z.number()).optional(),
   keystrokes: z.array(
     z.object({
       charIndex: z.number().int().nonnegative(),
@@ -82,12 +89,15 @@ export async function soloResultsRoutes(app: FastifyInstance) {
     const startedAt = new Date(Date.now() - Math.round(body.durationMs));
     const endedAt = new Date();
 
+    const verdict = evaluateAntiCheat(authoritativeWpm, body.keystrokes);
+    const mode = body.mode ?? "solo_cpu";
+
     const [race] = await db
       .insert(races)
       .values({
         sessionId: null,
         passageId: passage.id,
-        mode: "solo_cpu",
+        mode,
         startedAt,
         endedAt,
       })
@@ -108,11 +118,14 @@ export async function soloResultsRoutes(app: FastifyInstance) {
         guestSessionToken: body.guestSessionToken,
         carColor,
         isCpu: false,
-        cpuDifficulty: body.cpuDifficulty,
+        cpuDifficulty: body.cpuDifficulty ?? null,
         finalWpm: authoritativeWpm,
         finalAccuracy: authoritativeAccuracy,
         placement: body.placement,
         disconnected: false,
+        shadowHeld: verdict.shadowHeld,
+        flagReason: verdict.flagReason,
+        mistypeCounts: body.mistypeCounts ?? null,
       })
       .returning({ id: raceParticipants.id });
 
@@ -120,7 +133,27 @@ export async function soloResultsRoutes(app: FastifyInstance) {
       return reply.code(500).send({ error: "Failed to create participant" });
     }
 
-    if (body.keystrokes.length > 0) {
+    let isPb = false;
+    if (sessionUser && authoritativeWpm > 0 && body.keystrokes.length > 0) {
+      isPb = await maybeUpdatePersonalBest({
+        userId: sessionUser.id,
+        participantId: participant.id,
+        passageId: passage.id,
+        wpm: authoritativeWpm,
+        accuracy: authoritativeAccuracy,
+        keystrokes: body.keystrokes,
+        shadowHeld: verdict.shadowHeld,
+      });
+    }
+
+    if (
+      body.keystrokes.length > 0 &&
+      shouldRetainKeystrokes({
+        shadowHeld: verdict.shadowHeld,
+        leaderboardEligible: !!sessionUser && !verdict.shadowHeld,
+        isPersonalBest: isPb,
+      })
+    ) {
       await db.insert(keystrokeLogs).values({
         raceParticipantId: participant.id,
         strokes: body.keystrokes,
@@ -128,7 +161,9 @@ export async function soloResultsRoutes(app: FastifyInstance) {
     }
 
     if (sessionUser && authoritativeWpm > 0) {
-      await recordSignedInResult(sessionUser.id, authoritativeWpm, endedAt);
+      await recordSignedInResult(sessionUser.id, authoritativeWpm, endedAt, {
+        shadowHeld: verdict.shadowHeld,
+      });
     }
 
     return {
@@ -136,6 +171,7 @@ export async function soloResultsRoutes(app: FastifyInstance) {
       participantId: participant.id,
       finalWpm: authoritativeWpm,
       finalAccuracy: authoritativeAccuracy,
+      shadowHeld: verdict.shadowHeld,
     };
   });
 }

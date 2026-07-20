@@ -33,7 +33,17 @@ export type LiveRace = {
     durationMs: number;
     mistakes: number;
     keystrokes: { charIndex: number; timestampMs: number }[];
+    mistypeCounts: Record<string, number>;
   }[];
+};
+
+export type CommitState = {
+  endsAt: number;
+  promptedByMemberId: string;
+  promptedByName: string;
+  readyMemberIds: string[];
+  locked: boolean;
+  timer: ReturnType<typeof setTimeout> | null;
 };
 
 export type SessionLeaderboardEntry = {
@@ -50,7 +60,7 @@ export type RematchRequest = {
 
 export type LiveSession = {
   id: string;
-  visibility: "public" | "challenge";
+  visibility: "public" | "challenge" | "matchmade";
   status: SessionStatus;
   creatorGuestToken: string;
   creatorUserId: string | null;
@@ -59,6 +69,10 @@ export type LiveSession = {
   race: LiveRace | null;
   leaderboard: SessionLeaderboardEntry[];
   rematch: RematchRequest | null;
+  /** Quick Race Ready → commit countdown */
+  commit: CommitState | null;
+  /** Seats claimed by matchmaking before socket join. */
+  reservedSeats: number;
   /** Broadcast tick handle */
   tickTimer: ReturnType<typeof setInterval> | null;
   /** Hard race deadline (AFK / stall guard). */
@@ -80,7 +94,7 @@ export type PublicMember = {
 export type SessionSnapshot = {
   id: string;
   status: SessionStatus;
-  visibility: "public" | "challenge";
+  visibility: "public" | "challenge" | "matchmade";
   members: PublicMember[];
   race: null | {
     id: string;
@@ -91,10 +105,17 @@ export type SessionSnapshot = {
   };
   leaderboard: SessionLeaderboardEntry[];
   rematch: RematchRequest | null;
+  commit: {
+    endsAt: number;
+    promptedByName: string;
+    readyMemberIds: string[];
+  } | null;
+  maxPlayers: number;
   you: {
     memberId: string;
     displayName: string;
     isCreator: boolean;
     pending: boolean;
+    ready: boolean;
   } | null;
 };

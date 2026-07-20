@@ -10,6 +10,12 @@ import {
 } from "../db/schema.js";
 import { assignUniqueName } from "../lib/anonymous-names.js";
 import { pickGuestCarColor } from "../lib/car-colors.js";
+import {
+  evaluateAntiCheat,
+  shouldRetainKeystrokes,
+} from "../lib/anti-cheat.js";
+import { updateEloForRace } from "../lib/elo.js";
+import { maybeUpdatePersonalBest } from "../lib/personal-bests.js";
 import { recordSignedInResult } from "../lib/retention.js";
 import {
   accuracyFromMistakes,
@@ -26,6 +32,13 @@ import type {
 } from "./types.js";
 
 export const MAX_SESSION_PLAYERS = 8;
+export const MAX_MATCHMADE_PLAYERS = 6;
+
+export function maxPlayersFor(session: LiveSession): number {
+  return session.visibility === "matchmade"
+    ? MAX_MATCHMADE_PLAYERS
+    : MAX_SESSION_PLAYERS;
+}
 
 function emptyLive(
   partial: Pick<
@@ -45,10 +58,35 @@ function emptyLive(
     race: null,
     leaderboard: [],
     rematch: null,
+    commit: null,
+    reservedSeats: 0,
     tickTimer: null,
     deadlineTimer: null,
     graceTimer: null,
   };
+}
+
+export async function createMatchmadeSession() {
+  const id = generateSessionCode();
+  await db.insert(raceSessions).values({
+    id,
+    visibility: "matchmade",
+    creatorGuestToken: null,
+    creatorUserId: null,
+    status: "waiting",
+  });
+
+  const live = emptyLive({
+    id,
+    visibility: "matchmade",
+    status: "waiting",
+    creatorGuestToken: "",
+    creatorUserId: null,
+    allowedUserIds: null,
+    createdAt: Date.now(),
+  });
+  setLiveSession(live);
+  return live;
 }
 
 export async function createPublicSession(guestSessionToken: string) {
@@ -168,12 +206,21 @@ export function snapshotFor(
       : null,
     leaderboard: session.leaderboard,
     rematch: session.rematch,
+    commit: session.commit
+      ? {
+          endsAt: session.commit.endsAt,
+          promptedByName: session.commit.promptedByName,
+          readyMemberIds: [...session.commit.readyMemberIds],
+        }
+      : null,
+    maxPlayers: maxPlayersFor(session),
     you: you
       ? {
           memberId: you.id,
           displayName: you.displayName,
           isCreator: you.isCreator,
           pending: you.pending,
+          ready: session.commit?.readyMemberIds.includes(you.id) ?? false,
         }
       : null,
   };
@@ -197,7 +244,8 @@ export type JoinResult =
         | "not_found"
         | "already_joined"
         | "forbidden"
-        | "auth_required";
+        | "auth_required"
+        | "racing";
       message: string;
     };
 
@@ -256,9 +304,30 @@ export function joinSession(
     return { ok: true, member: existing, promotedPending: false };
   }
 
+  // Quick Race: keep searchers in the queue rather than spectating mid-race.
+  if (session.visibility === "matchmade" && session.status === "racing") {
+    return {
+      ok: false,
+      code: "racing",
+      message: "This race already started. Stay in Quick Race to join the next one.",
+    };
+  }
+
+  if (session.commit?.locked) {
+    return {
+      ok: false,
+      code: "full",
+      message: "This race is about to start.",
+    };
+  }
+
   const activeCount = session.members.filter((m) => !m.disconnected).length;
-  if (activeCount >= MAX_SESSION_PLAYERS) {
+  if (activeCount >= maxPlayersFor(session)) {
     return { ok: false, code: "full", message: "This race is full." };
+  }
+
+  if (session.visibility === "matchmade" && session.reservedSeats > 0) {
+    session.reservedSeats = Math.max(0, session.reservedSeats - 1);
   }
 
   const isCreator =
@@ -387,9 +456,13 @@ export async function beginRace(session: LiveSession): Promise<LiveSession["race
     mode:
       session.visibility === "challenge"
         ? "direct_challenge"
-        : "public_multiplayer",
+        : session.visibility === "matchmade"
+          ? "quick_race"
+          : "open_race",
     startedAt: new Date(),
   });
+
+  session.commit = null;
 
   return race;
 }
@@ -411,6 +484,7 @@ export type FinishInput = {
   mistakes: number;
   keystrokes: { charIndex: number; timestampMs: number }[];
   durationMs: number;
+  mistypeCounts?: Record<string, number>;
 };
 
 export function recordFinish(
@@ -440,6 +514,7 @@ export function recordFinish(
     durationMs: input.durationMs,
     mistakes: input.mistakes,
     keystrokes: input.keystrokes,
+    mistypeCounts: input.mistypeCounts ?? {},
   });
 
   const racingMembers = session.members.filter(
@@ -489,11 +564,17 @@ export async function completeRace(session: LiveSession) {
     })
     .map((r, i) => ({ ...r, placement: i + 1 }));
 
+  const eloCompetitors: { userId: string; placement: number }[] = [];
+
   // Persist participants (guests included) for session leaderboard / claim
   for (const r of results) {
     const member = session.members.find((m) => m.id === r.memberId);
     if (!member) continue;
     const finish = race.finishes.find((f) => f.memberId === r.memberId);
+    const verdict =
+      r.finished && finish
+        ? evaluateAntiCheat(r.wpm, finish.keystrokes)
+        : { shadowHeld: false, flagReason: null as string | null };
 
     const [participant] = await db
       .insert(raceParticipants)
@@ -508,23 +589,65 @@ export async function completeRace(session: LiveSession) {
         finalAccuracy: r.finished ? r.accuracy : null,
         placement: r.finished ? r.placement : null,
         disconnected: false,
+        shadowHeld: verdict.shadowHeld,
+        flagReason: verdict.flagReason,
+        mistypeCounts: finish?.mistypeCounts ?? null,
       })
       .returning({ id: raceParticipants.id });
 
-    if (participant && finish && finish.keystrokes.length > 0) {
+    let isPb = false;
+    if (
+      participant &&
+      member.userId &&
+      r.finished &&
+      finish &&
+      finish.keystrokes.length > 0
+    ) {
+      isPb = await maybeUpdatePersonalBest({
+        userId: member.userId,
+        participantId: participant.id,
+        passageId: race.passageId,
+        wpm: r.wpm,
+        accuracy: r.accuracy,
+        keystrokes: finish.keystrokes,
+        shadowHeld: verdict.shadowHeld,
+      });
+    }
+
+    const retain =
+      participant &&
+      finish &&
+      finish.keystrokes.length > 0 &&
+      shouldRetainKeystrokes({
+        shadowHeld: verdict.shadowHeld,
+        leaderboardEligible: !!member.userId && r.finished && !verdict.shadowHeld,
+        isPersonalBest: isPb,
+      });
+
+    if (retain && participant) {
       await db.insert(keystrokeLogs).values({
         raceParticipantId: participant.id,
-        strokes: finish.keystrokes,
+        strokes: finish!.keystrokes,
       });
     }
 
     if (r.finished && r.wpm > 0) {
       upsertLeaderboard(session, member, r.wpm);
       if (member.userId) {
-        await recordSignedInResult(member.userId, r.wpm);
+        await recordSignedInResult(member.userId, r.wpm, new Date(), {
+          shadowHeld: verdict.shadowHeld,
+        });
+        if (!verdict.shadowHeld) {
+          eloCompetitors.push({
+            userId: member.userId,
+            placement: r.placement,
+          });
+        }
       }
     }
   }
+
+  await updateEloForRace(eloCompetitors);
 
   await db
     .update(races)

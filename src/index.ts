@@ -1,6 +1,7 @@
 import "dotenv/config";
 import cors from "@fastify/cors";
 import Fastify from "fastify";
+import { ensureSchema } from "./db/ensure-schema.js";
 import { env } from "./env.js";
 import { attachRaceGateway } from "./realtime/gateway.js";
 import { pingRedis } from "./redis.js";
@@ -8,16 +9,25 @@ import { authRoutes } from "./routes/auth.js";
 import { challengesRoutes } from "./routes/challenges.js";
 import { claimRoutes } from "./routes/claim.js";
 import { leaderboardRoutes } from "./routes/leaderboard.js";
+import { matchmakingRoutes } from "./routes/matchmaking.js";
 import { meRoutes } from "./routes/me.js";
 import { notificationsRoutes } from "./routes/notifications.js";
 import { passagesRoutes } from "./routes/passages.js";
 import { sessionsRoutes } from "./routes/sessions.js";
 import { socketTokenRoutes } from "./routes/socket-token.js";
 import { soloResultsRoutes } from "./routes/solo-results.js";
+import { statsRoutes } from "./routes/stats.js";
 
 const app = Fastify({
   logger: true,
 });
+
+try {
+  await ensureSchema();
+  app.log.info("Schema ensure OK");
+} catch (err) {
+  app.log.error(err, "Schema ensure failed — migrate manually if needed");
+}
 
 await app.register(cors, {
   origin: [...env.corsOrigins],
@@ -38,7 +48,9 @@ await app.register(socketTokenRoutes);
 await app.register(meRoutes);
 await app.register(claimRoutes);
 await app.register(leaderboardRoutes);
+await app.register(statsRoutes);
 await app.register(challengesRoutes);
+await app.register(matchmakingRoutes);
 await app.register(notificationsRoutes);
 await app.register(passagesRoutes);
 await app.register(soloResultsRoutes);

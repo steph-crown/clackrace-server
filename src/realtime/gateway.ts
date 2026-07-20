@@ -2,6 +2,11 @@ import type { FastifyInstance } from "fastify";
 import { Server, type Socket } from "socket.io";
 import { getUserFromSessionToken } from "../auth/token.js";
 import { env } from "../env.js";
+import { COMMIT_MS } from "../matchmaking/store.js";
+import {
+  onMatchmadeEmptyOrRacing,
+  onMatchmadeWaiting,
+} from "../matchmaking/service.js";
 import {
   beginRace,
   completeRace,
@@ -126,6 +131,48 @@ async function maybeCompleteRace(io: Server, session: LiveSession) {
 
   io.to(room(session.id)).emit("race:results", completed);
   broadcastState(io, session);
+  if (session.visibility === "matchmade") {
+    await onMatchmadeWaiting(session);
+  }
+}
+
+function clearCommit(session: LiveSession) {
+  if (session.commit?.timer) clearTimeout(session.commit.timer);
+  session.commit = null;
+}
+
+async function finishCommit(io: Server, session: LiveSession) {
+  if (!session.commit) return;
+  session.commit.locked = true;
+  const active = session.members.filter((m) => !m.disconnected && !m.pending);
+  if (active.length < 2) {
+    clearCommit(session);
+    io.to(room(session.id)).emit("session:toast", {
+      message: "Not enough racers — searching again…",
+    });
+    broadcastState(io, session);
+    await onMatchmadeWaiting(session);
+    return;
+  }
+  clearCommit(session);
+  await onMatchmadeEmptyOrRacing(session.id);
+  await startRaceFlow(io, session, "initial");
+}
+
+function activeLobbyCount(session: LiveSession) {
+  return session.members.filter((m) => !m.disconnected && !m.pending).length;
+}
+
+async function maybeEndEmptyMatchmade(io: Server, session: LiveSession) {
+  if (session.visibility !== "matchmade") return;
+  if (activeLobbyCount(session) > 0) {
+    await onMatchmadeWaiting(session);
+    return;
+  }
+  clearCommit(session);
+  await onMatchmadeEmptyOrRacing(session.id);
+  await endSession(session);
+  io.to(room(session.id)).emit("session:ended", {});
 }
 
 export function attachRaceGateway(app: FastifyInstance) {
@@ -226,6 +273,7 @@ export function attachRaceGateway(app: FastifyInstance) {
         message: `${name} left`,
       });
       broadcastState(io, session);
+      await maybeEndEmptyMatchmade(io, session);
       data.sessionId = undefined;
       data.memberId = undefined;
       ack?.({ ok: true });
@@ -235,6 +283,13 @@ export function attachRaceGateway(app: FastifyInstance) {
       if (!data.sessionId || !data.memberId) return;
       const session = await ensureLiveSession(data.sessionId);
       if (!session) return;
+      if (session.visibility === "matchmade") {
+        ack?.({
+          ok: false,
+          message: "Use Ready to start a Quick Race.",
+        });
+        return;
+      }
       if (!isCreator(session, data.memberId)) {
         ack?.({ ok: false, message: "Only the creator can start the race" });
         return;
@@ -250,6 +305,50 @@ export function attachRaceGateway(app: FastifyInstance) {
       }
       ack?.({ ok: true });
       await startRaceFlow(io, session, "initial");
+    });
+
+    socket.on("session:ready", async (ack?: (res: unknown) => void) => {
+      if (!data.sessionId || !data.memberId) return;
+      const session = await ensureLiveSession(data.sessionId);
+      if (!session) return;
+      if (session.visibility !== "matchmade") {
+        ack?.({ ok: false, message: "Ready is only for Quick Race." });
+        return;
+      }
+      if (session.status !== "waiting") {
+        ack?.({ ok: false, message: "Race already in progress" });
+        return;
+      }
+      const member = session.members.find((m) => m.id === data.memberId);
+      if (!member || member.disconnected || member.pending) {
+        ack?.({ ok: false, message: "Can't ready yet." });
+        return;
+      }
+      if (activeLobbyCount(session) < 2) {
+        ack?.({ ok: false, message: "Need at least two racers." });
+        return;
+      }
+
+      if (!session.commit) {
+        session.commit = {
+          endsAt: Date.now() + COMMIT_MS,
+          promptedByMemberId: member.id,
+          promptedByName: member.displayName,
+          readyMemberIds: [member.id],
+          locked: false,
+          timer: setTimeout(() => {
+            void finishCommit(io, session);
+          }, COMMIT_MS),
+        };
+        io.to(room(session.id)).emit("session:toast", {
+          message: `${member.displayName} is ready — race starts in 10…`,
+        });
+      } else if (!session.commit.readyMemberIds.includes(member.id)) {
+        session.commit.readyMemberIds.push(member.id);
+      }
+
+      broadcastState(io, session);
+      ack?.({ ok: true, endsAt: session.commit.endsAt });
     });
 
     socket.on("session:playAgain", async (ack?: (res: unknown) => void) => {
@@ -273,6 +372,14 @@ export function attachRaceGateway(app: FastifyInstance) {
         });
         broadcastState(io, session);
         ack?.({ ok: true, pending: true });
+        return;
+      }
+
+      if (session.visibility === "matchmade") {
+        ack?.({
+          ok: false,
+          message: "Press Ready when everyone is set.",
+        });
         return;
       }
 
@@ -326,6 +433,10 @@ export function attachRaceGateway(app: FastifyInstance) {
       if (!data.sessionId || !data.memberId) return;
       const session = await ensureLiveSession(data.sessionId);
       if (!session) return;
+      if (session.visibility === "matchmade") {
+        ack?.({ ok: false, message: "Leave the lobby to exit Quick Race" });
+        return;
+      }
       if (!isCreator(session, data.memberId)) {
         ack?.({ ok: false, message: "Only the creator can end the session" });
         return;
@@ -366,6 +477,9 @@ export function attachRaceGateway(app: FastifyInstance) {
           mistakes: payload.mistakes,
           keystrokes: payload.keystrokes ?? [],
           durationMs: payload.durationMs,
+          mistypeCounts: (
+            payload as { mistypeCounts?: Record<string, number> }
+          ).mistypeCounts,
         });
         if (!result) {
           ack?.({ ok: false });
@@ -405,11 +519,16 @@ export function attachRaceGateway(app: FastifyInstance) {
       member.disconnected = true;
       member.socketId = null;
       member.isCreator = false;
+      if (session.commit) {
+        session.commit.readyMemberIds = session.commit.readyMemberIds.filter(
+          (id) => id !== member.id,
+        );
+      }
       io.to(room(session.id)).emit("session:toast", {
         message: `${member.displayName} left`,
       });
 
-      if (wasCreator) {
+      if (wasCreator && session.visibility !== "matchmade") {
         const newCreatorId = transferCreator(session);
         if (newCreatorId) {
           const host = session.members.find((m) => m.id === newCreatorId);
@@ -421,6 +540,7 @@ export function attachRaceGateway(app: FastifyInstance) {
         }
       }
       broadcastState(io, session);
+      await maybeEndEmptyMatchmade(io, session);
     });
   });
 

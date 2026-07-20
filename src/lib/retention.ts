@@ -62,8 +62,14 @@ export async function recordSignedInResult(
   userId: string,
   wpm: number,
   achievedAt = new Date(),
+  opts?: { shadowHeld?: boolean },
 ): Promise<void> {
   if (wpm <= 0) return;
+  // Shadow-held runs still bump streak (play happened) but skip public boards.
+  if (opts?.shadowHeld) {
+    await bumpStreak(userId, utcDay(achievedAt));
+    return;
+  }
 
   await upsertScope(userId, "all_time", wpm, achievedAt);
 

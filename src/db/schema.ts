@@ -13,6 +13,7 @@ import {
 export const visibilityEnum = pgEnum("session_visibility", [
   "public",
   "challenge",
+  "matchmade",
 ]);
 export const sessionStatusEnum = pgEnum("session_status", [
   "waiting",
@@ -173,9 +174,35 @@ export const raceParticipants = pgTable("race_participants", {
   finalAccuracy: real("final_accuracy"),
   placement: integer("placement"),
   disconnected: boolean("disconnected").notNull().default(false),
+  /** Anti-cheat: held from public leaderboards pending review. */
+  shadowHeld: boolean("shadow_held").notNull().default(false),
+  flagReason: text("flag_reason"),
+  /** Expected-key → wrong-press counts for heatmap. */
+  mistypeCounts: jsonb("mistype_counts").$type<Record<string, number>>(),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
+});
+
+/** Best verified WPM + keystroke log per user per difficulty (ghost racing). */
+export const personalBests = pgTable("personal_bests", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => user.id, { onDelete: "cascade" }),
+  difficulty: passageDifficultyEnum("difficulty").notNull(),
+  bestWpm: real("best_wpm").notNull(),
+  bestAccuracy: real("best_accuracy").notNull(),
+  raceParticipantId: uuid("race_participant_id")
+    .notNull()
+    .references(() => raceParticipants.id),
+  passageId: text("passage_id")
+    .notNull()
+    .references(() => passages.id),
+  strokes: jsonb("strokes")
+    .$type<{ charIndex: number; timestampMs: number }[]>()
+    .notNull(),
+  achievedAt: timestamp("achieved_at", { withTimezone: true }).notNull(),
 });
 
 export const keystrokeLogs = pgTable("keystroke_logs", {
