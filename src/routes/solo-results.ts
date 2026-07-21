@@ -155,6 +155,7 @@ export async function soloResultsRoutes(app: FastifyInstance) {
         shadowHeld: verdict.shadowHeld,
         leaderboardEligible: !!sessionUser && !verdict.shadowHeld,
         isPersonalBest: isPb,
+        claimableGuest: !sessionUser && !verdict.shadowHeld,
       })
     ) {
       await db.insert(keystrokeLogs).values({

@@ -42,11 +42,18 @@ export function evaluateAntiCheat(
   return { shadowHeld: false, flagReason: null };
 }
 
-/** Keep keystroke logs for leaderboard-eligible, flagged, or PB-bound runs. */
+/** Keep keystroke logs for leaderboard, flagged, PB, or claimable guest runs. */
 export function shouldRetainKeystrokes(opts: {
   shadowHeld: boolean;
   leaderboardEligible: boolean;
   isPersonalBest: boolean;
+  /** Guest finish with a session token — needed so claim can rebuild PB/ghost. */
+  claimableGuest?: boolean;
 }): boolean {
-  return opts.shadowHeld || opts.leaderboardEligible || opts.isPersonalBest;
+  return (
+    opts.shadowHeld ||
+    opts.leaderboardEligible ||
+    opts.isPersonalBest ||
+    !!opts.claimableGuest
+  );
 }

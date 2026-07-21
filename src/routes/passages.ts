@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
+import { and, eq, like } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { passages } from "../db/schema.js";
 
@@ -13,7 +13,9 @@ export async function passagesRoutes(app: FastifyInstance) {
         source: passages.source,
       })
       .from(passages)
-      .where(eq(passages.source, "official"));
+      .where(
+        and(eq(passages.source, "official"), like(passages.id, "official-%")),
+      );
 
     return { passages: rows };
   });

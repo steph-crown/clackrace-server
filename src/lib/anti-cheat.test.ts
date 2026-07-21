@@ -41,7 +41,7 @@ describe("evaluateAntiCheat", () => {
 });
 
 describe("shouldRetainKeystrokes", () => {
-  it("retains shadow, leaderboard, or PB runs", () => {
+  it("retains shadow, leaderboard, PB, or claimable guest runs", () => {
     expect(
       shouldRetainKeystrokes({
         shadowHeld: true,
@@ -61,6 +61,14 @@ describe("shouldRetainKeystrokes", () => {
         shadowHeld: false,
         leaderboardEligible: false,
         isPersonalBest: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldRetainKeystrokes({
+        shadowHeld: false,
+        leaderboardEligible: false,
+        isPersonalBest: false,
+        claimableGuest: true,
       }),
     ).toBe(true);
     expect(

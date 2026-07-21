@@ -425,10 +425,29 @@ export function forfeitMember(session: LiveSession, memberId: string): void {
   }
 }
 
+/** Prefer medium (~80%) with some hard (~20%). Easy is not in the v1 race pool.
+ *  Only `official-*` ids are eligible so retired legacy rows never resurface.
+ */
 export async function pickPassage() {
   const rows = await db.select().from(passages);
-  if (rows.length === 0) throw new Error("No passages seeded");
-  return rows[Math.floor(Math.random() * rows.length)]!;
+  const official = rows.filter((r) => r.id.startsWith("official-"));
+  const poolSource = official.length > 0 ? official : rows;
+  if (poolSource.length === 0) throw new Error("No passages seeded");
+
+  const medium = poolSource.filter((r) => r.difficulty === "medium");
+  const hard = poolSource.filter((r) => r.difficulty === "hard");
+  const pool =
+    medium.length > 0 && hard.length > 0
+      ? Math.random() < 0.8
+        ? medium
+        : hard
+      : medium.length > 0
+        ? medium
+        : hard.length > 0
+          ? hard
+          : poolSource;
+
+  return pool[Math.floor(Math.random() * pool.length)]!;
 }
 
 export async function beginRace(session: LiveSession): Promise<LiveSession["race"]> {
@@ -638,6 +657,11 @@ export async function completeRace(session: LiveSession) {
         shadowHeld: verdict.shadowHeld,
         leaderboardEligible: !!member.userId && r.finished && !verdict.shadowHeld,
         isPersonalBest: isPb,
+        claimableGuest:
+          !member.userId &&
+          !!member.guestSessionToken &&
+          r.finished &&
+          !verdict.shadowHeld,
       });
 
     if (retain && participant) {
