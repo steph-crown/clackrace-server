@@ -7,6 +7,9 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:seed": "tsx src/db/seed.ts",
@@ -29,6 +32,7 @@
     "@types/node": "^22.15.32",
     "drizzle-kit": "^0.31.1",
     "tsx": "^4.20.3",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.7"
   }
 }
