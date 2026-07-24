@@ -1,0 +1,4 @@
+# pnpm 11+ settings (Corepack may resolve to pnpm 11).
+# esbuild needs its postinstall to provide platform binaries for tsx/drizzle-kit/vitest.
+allowBuilds:
+  esbuild: true
