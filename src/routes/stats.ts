@@ -1,13 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { getSessionUser } from "../auth/session.js";
 import { sendError } from "../lib/api-error.js";
-import { getUserElo } from "../lib/elo.js";
+import { getGhostForBest } from "../lib/personal-bests.js";
 import {
-  getGhostForBest,
-  getOverallPersonalBest,
-  getStatsHistory,
-  reconcilePersonalBests,
-} from "../lib/personal-bests.js";
+  buildStatsForUserId,
+  getPublicStatsByUsername,
+} from "../lib/stats-view.js";
 
 export async function statsRoutes(app: FastifyInstance) {
   app.get("/stats/me", async (req, reply) => {
@@ -16,51 +14,20 @@ export async function statsRoutes(app: FastifyInstance) {
       return sendError(reply, 401, "unauthorized", "Sign in to view stats.");
     }
 
-    // Heal PBs that missed historical runs (e.g. races before PB tracking).
-    await reconcilePersonalBests(sessionUser.id);
-
-    const [history, pb, elo] = await Promise.all([
-      getStatsHistory(sessionUser.id),
-      getOverallPersonalBest(sessionUser.id),
-      getUserElo(sessionUser.id),
-    ]);
-
-    const heatmap: Record<string, number> = {};
-    for (const row of history) {
-      if (!row.mistypeCounts) continue;
-      for (const [k, v] of Object.entries(row.mistypeCounts)) {
-        heatmap[k] = (heatmap[k] ?? 0) + v;
-      }
-    }
-
-    const series = history
-      .filter((h) => h.wpm != null && !h.shadowHeld)
-      .map((h) => ({
-        wpm: h.wpm!,
-        accuracy: h.accuracy ?? 0,
-        at: (h.endedAt ?? h.startedAt).toISOString(),
-        mode: h.mode,
-      }))
-      .reverse();
-
-    return {
-      elo: {
-        rating: elo.rating,
-        racesCounted: elo.racesCounted,
-        kFactorTier: elo.kFactorTier,
-      },
-      series,
-      personalBest: pb
-        ? {
-            wpm: Math.round(pb.bestWpm * 10) / 10,
-            accuracy: Math.round(pb.bestAccuracy * 10) / 10,
-            mode: pb.mode,
-            achievedAt: pb.achievedAt.toISOString(),
-          }
-        : null,
-      mistypeHeatmap: heatmap,
-    };
+    return buildStatsForUserId(sessionUser.id);
   });
+
+  /** Public garage by username (leaderboard deep-link). */
+  app.get<{ Params: { username: string } }>(
+    "/stats/u/:username",
+    async (req, reply) => {
+      const stats = await getPublicStatsByUsername(req.params.username);
+      if (!stats) {
+        return sendError(reply, 404, "not_found", "Racer not found.");
+      }
+      return stats;
+    },
+  );
 
   app.get("/stats/ghost", async (req, reply) => {
     const sessionUser = await getSessionUser(req);

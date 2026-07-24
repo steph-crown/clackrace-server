@@ -235,6 +235,8 @@ describe("leaveSession / race progress", () => {
           carColor: "#2ee6d6",
           guestSessionToken: "g",
           userId: null,
+          username: null,
+          rating: null,
           socketId: "s1",
           isCreator: true,
           pending: false,

@@ -6,6 +6,10 @@ export type LiveMember = {
   carColor: string;
   guestSessionToken: string;
   userId: string | null;
+  /** Signed-in profile username for garage links; null for guests. */
+  username: string | null;
+  /** Current ELO; null for guests. */
+  rating: number | null;
   socketId: string | null;
   isCreator: boolean;
   /** Waiting for current race to finish before becoming active. */
@@ -89,6 +93,8 @@ export type PublicMember = {
   isCreator: boolean;
   pending: boolean;
   disconnected: boolean;
+  username: string | null;
+  rating: number | null;
 };
 
 export type SessionSnapshot = {

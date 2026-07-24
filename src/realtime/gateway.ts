@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { Server, type Socket } from "socket.io";
 import { getUserFromSessionToken } from "../auth/token.js";
+import { getUserElo } from "../lib/elo.js";
 import { env } from "../env.js";
 import { COMMIT_MS } from "../matchmaking/store.js";
 import {
@@ -261,6 +262,15 @@ export function attachRaceGateway(app: FastifyInstance) {
             ack?.(result);
             socket.emit("session:error", result);
             return;
+          }
+
+          if (result.member.userId) {
+            try {
+              const elo = await getUserElo(result.member.userId);
+              result.member.rating = Math.round(elo.rating);
+            } catch {
+              result.member.rating = 1000;
+            }
           }
 
           data.sessionId = session.id;

@@ -14,7 +14,7 @@ import {
   evaluateAntiCheat,
   shouldRetainKeystrokes,
 } from "../lib/anti-cheat.js";
-import { updateEloForRace } from "../lib/elo.js";
+import { updateEloForRace, getUserElo } from "../lib/elo.js";
 import { maybeUpdatePersonalBest } from "../lib/personal-bests.js";
 import { recordSignedInResult } from "../lib/retention.js";
 import {
@@ -172,6 +172,8 @@ export function publicMembers(session: LiveSession): PublicMember[] {
     isCreator: m.isCreator,
     pending: m.pending,
     disconnected: m.disconnected,
+    username: m.username,
+    rating: m.rating,
   }));
 }
 
@@ -290,6 +292,10 @@ export function joinSession(
     }
   }
 
+  const profileUsername = opts.displayUsername?.trim()
+    ? opts.displayUsername.trim().toLowerCase()
+    : null;
+
   const existing = session.members.find(
     (m) =>
       !m.disconnected &&
@@ -299,7 +305,8 @@ export function joinSession(
   if (existing) {
     existing.socketId = opts.socketId;
     if (opts.userId) existing.userId = opts.userId;
-    if (opts.displayUsername?.trim()) {
+    if (profileUsername) {
+      existing.username = profileUsername;
       const others = new Set(
         session.members
           .filter((m) => m.id !== existing.id && !m.disconnected)
@@ -372,6 +379,8 @@ export function joinSession(
     carColor,
     guestSessionToken: opts.guestSessionToken,
     userId: opts.userId ?? null,
+    username: opts.userId ? profileUsername : null,
+    rating: null,
     socketId: opts.socketId,
     isCreator,
     pending,
@@ -688,6 +697,16 @@ export async function completeRace(session: LiveSession) {
   }
 
   await updateEloForRace(eloCompetitors);
+
+  for (const m of session.members) {
+    if (!m.userId || m.disconnected) continue;
+    try {
+      const elo = await getUserElo(m.userId);
+      m.rating = Math.round(elo.rating);
+    } catch {
+      /* keep prior rating */
+    }
+  }
 
   await db
     .update(races)
