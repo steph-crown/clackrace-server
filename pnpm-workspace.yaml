@@ -1,4 +1,8 @@
-# pnpm 11+ settings (Corepack may resolve to pnpm 11).
-# esbuild needs its postinstall to provide platform binaries for tsx/drizzle-kit/vitest.
+# Single-package project — `packages` is required when this file exists
+# (Railway: ERROR packages field missing or empty).
+packages:
+  - "."
+
+# pnpm 11+: allow esbuild postinstall for tsx/drizzle-kit/vitest.
 allowBuilds:
   esbuild: true
